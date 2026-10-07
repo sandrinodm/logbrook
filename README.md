@@ -1,4 +1,6 @@
-# Logbrook
+<h1><img src="docs/assets/logbrook-banner.webp" alt="Logbrook" width="720"></h1>
+
+[![GHCR container image](https://img.shields.io/badge/GHCR-container%20image-2496ED?logo=docker&logoColor=white)](https://github.com/sandrinodm/logbrook/pkgs/container/logbrook)
 
 Lightweight, self-hosted log search for structured application logs.
 
