@@ -1,0 +1,16 @@
+[
+  {
+    "name": "libduckdb-sys",
+    "version": "1.10506.0",
+    "repository": "https://github.com/duckdb/duckdb",
+    "revision": "069cc9f9b5be802405797faecc284961b07c70ef",
+    "output": "licenses/duckdb.txt"
+  },
+  {
+    "name": "duckdb",
+    "version": "1.10506.0",
+    "repository": "https://github.com/duckdb/duckdb-rs",
+    "revision": "0fec186cdd4ada2f7703a2df5ee18f9f78d95f8e",
+    "output": "licenses/duckdb-rs.txt"
+  }
+]

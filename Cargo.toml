@@ -1,0 +1,46 @@
+[package]
+name = "logbrook"
+version = "0.1.0"
+edition = "2024"
+description = "Lightweight self-hosted log search with DuckDB and Parquet"
+license = "MIT"
+publish = false
+
+[workspace]
+members = ["xtask"]
+resolver = "3"
+default-members = ["."]
+
+[dependencies]
+axum = { version = "0.8", features = ["json", "query", "http1", "tokio"] }
+clap = { version = "4.5", features = ["derive"] }
+duckdb = { version = "1.10506.0", features = ["bundled", "json", "parquet"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1.12", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+thiserror = "2.0"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
+toml = "1.1.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# Application code stays safe Rust; native code is isolated in dependencies.
+[lints.rust]
+unsafe_code = "forbid"
+
+# Keep stdout machine-readable and avoid panics on a closed output pipe.
+[lints.clippy]
+disallowed_macros = "deny"

@@ -1,0 +1,264 @@
+# Copy this file and replace example credentials. Keep real credentials out of Git.
+# Configuration loads at startup: built-in defaults < TOML file < supported env vars.
+# Restart the server to apply changes. Unknown TOML keys are rejected.
+# There is no generic LOGBROOK_<SETTING> mapping: only the env vars named below work.
+# Unset env vars leave TOML/defaults intact. An empty env var is still a value:
+# positive integer overrides reject empty/zero/negative values; token overrides
+# reject empty credentials. Numeric env values are base-10 integers, without units.
+# Global policy overrides become defaults for indexes; explicit [indexes.<name>]
+# policies take precedence over those global values, including global env overrides.
+
+# Listening IP and port for HTTP. IPv6 uses "[::1]:3100". Env: LOGBROOK_BIND.
+bind = "127.0.0.1:3100"
+
+# Optional credentials for index management, including deletion. Default: none.
+# Each credential must be distinct from every ingest/read token. Admin credentials
+# do not grant log read/ingest access. Env: LOGBROOK_ADMIN_TOKEN replaces this entire
+# list with one token. Unset leaves the list intact; empty fails validation.
+# admin_tokens = ["replace-with-random-admin-token"]
+
+# Default event age in milliseconds before archival to Parquet. Positive and
+# shorter than retention. Explicit per-index archive ages override this default.
+# Env: LOGBROOK_ARCHIVE_AFTER_MS replaces this global default.
+archive_after_ms = 86400000
+
+# Default retention in days, applied separately to each index. One day = 86400000 ms.
+# Retention must exceed archive age. Size pressure can expire events earlier.
+# Env: LOGBROOK_RETENTION_DAYS replaces this alias. Do not set it together with
+# LOGBROOK_RETENTION_MS. Explicit per-index retention still takes precedence.
+retention_days = 7
+
+# Alternative global retention in milliseconds; built-in default is 604800000.
+# Remove retention_days above to use this TOML value: the days alias wins if both
+# TOML fields are present. Env: LOGBROOK_RETENTION_MS clears the global days alias
+# and replaces retention_ms. Do not also set LOGBROOK_RETENTION_DAYS.
+# retention_ms = 604800000
+
+# Default measured disk footprint target per index, in decimal GB (1000000000 bytes).
+# Omit both this alias and storage.max_size_bytes to disable size retention.
+# This alias wins over storage.max_size_bytes if both appear in TOML.
+# Env: LOGBROOK_MAX_SIZE_GB replaces this alias; LOGBROOK_MAX_SIZE_BYTES instead
+# clears the alias and sets storage.max_size_bytes. Set only one of those env vars.
+# Explicit per-index size targets still take precedence over global env values.
+max_size_gb = 20
+
+# Process-wide maximum index slots, including the always-present default index.
+# Range: 1..64. Named indexes plus default must fit. memory_limit, temp_limit, and
+# queue_bytes divide across all slots, even unused ones. Env: LOGBROOK_MAX_INDEXES.
+max_indexes = 4
+
+# Seconds between background retention, archival, and compaction passes. Positive.
+# Env: LOGBROOK_MAINTENANCE_INTERVAL_SECS.
+maintenance_interval_secs = 60
+
+# Seconds allowed for graceful storage shutdown. Positive. TOML only; no env override.
+shutdown_timeout_secs = 30
+
+# Maximum concurrently accepted HTTP connections for the process, 1..65536.
+# TOML only; no env override.
+max_connections = 128
+
+# Milliseconds allowed to receive HTTP headers, 1..300000. TOML only; no env override.
+header_timeout_ms = 10000
+
+# Maximum raw ingestion body size per request in bytes, 1..16777216 (16 MiB).
+# TOML only; no env override.
+max_body_bytes = 1048576
+
+# Maximum serialized event size in bytes, positive and <= max_body_bytes.
+# TOML only; no env override.
+max_event_bytes = 65536
+
+# Maximum events in one ingestion request, 1..10000. TOML only; no env override.
+max_events = 1000
+
+# Maximum metadata nesting depth per event, 1..64. TOML only; no env override.
+max_metadata_depth = 16
+
+# Maximum metadata key/string and supported filter field size in bytes, positive
+# and <= max_event_bytes. TOML only; no env override.
+max_field_bytes = 4096
+
+# Maximum simultaneous ingestion requests for the process, 1..1024.
+# TOML only; no env override.
+max_inflight_requests = 16
+
+# Process-wide byte budget for raw ingestion bodies, reserving twice each body's
+# bytes to account for buffering. Must be >= 2 * max_body_bytes and <= 4294967295.
+# Exhaustion rejects ingestion with overload. TOML only; no env override.
+max_inflight_body_bytes = 16777216
+
+# Process-wide estimated decoded ingestion allocation budget in bytes; covers
+# parser/object overhead rather than just wire size. Must be >= max_event_bytes
+# and <= 4294967295. Exhaustion rejects ingestion. TOML only; no env override.
+max_decoded_bytes = 67108864
+
+# Maximum idle wait between ingestion body frames in milliseconds. Positive and
+# <= body_total_timeout_ms. TOML only; no env override.
+body_idle_timeout_ms = 5000
+
+# Total time allowed to receive an ingestion body in milliseconds, from the start
+# of body reading; >= body_idle_timeout_ms and <= 300000. TOML only; no env override.
+body_total_timeout_ms = 30000
+
+# How far into the future an ingested event timestamp may be, in milliseconds
+# relative to server time, 0..86400000. TOML only; no env override.
+max_future_skew_ms = 300000
+
+# Maximum buffered event data per tail subscriber in bytes, 1024..67108864 and
+# >= 2 * max_event_bytes + 1024. TOML only; no env override.
+max_tail_buffer_bytes = 1048576
+
+# Maximum time span of a query in milliseconds, positive and <= 366 days.
+# This value is 31 days. TOML only; no env override.
+max_query_range_ms = 2678400000
+
+# Maximum events requested per search page, 1..1000. TOML only; no env override.
+max_page_size = 1000
+
+# Process-wide maximum active tail subscribers, 1..1024. TOML only; no env override.
+max_tail_subscribers = 8
+
+# Milliseconds between live-tail polls; minimum 250. TOML only; no env override.
+tail_poll_ms = 1000
+
+# Storage settings apply to every index except the three shared byte budgets
+# explicitly described below. Only data_dir and max_size_bytes have env overrides.
+[storage]
+
+# Root storage directory; index data lives under <data_dir>/indexes/<name>.
+# Relative paths resolve from the server's working directory. Paths must be UTF-8
+# without *, ?, [, or ] characters. Env: LOGBROOK_DATA_DIR.
+data_dir = "data"
+
+# Reader worker threads/connections per index, 1..16. TOML only; no env override.
+reader_threads = 2
+
+# DuckDB execution threads per connection, 1..64. TOML only; no env override.
+duckdb_threads = 2
+
+# Shared DuckDB memory budget divided across max_indexes slots. Positive integer
+# KB, MB, or GB; decimal units, no spaces (e.g. "512MB"). Division rounds down to
+# whole KB; each slot needs >= 1KB. This is not a total process memory cap.
+# TOML only; no env override.
+memory_limit = "512MB"
+
+# Shared DuckDB temporary spill budget divided across max_indexes slots, with
+# the same decimal size syntax and rounding as memory_limit. Each slot needs >= 1KB.
+# TOML only; no env override.
+temp_limit = "2GB"
+
+# Maximum jobs in each index's writer, reader, and maintenance queues, 1..1024.
+# This is a job count, not bytes. TOML only; no env override.
+queue_capacity = 16
+
+# Shared queued ingestion byte budget divided across max_indexes slots; total
+# range 1024..4294967295 bytes, with >= 1024 bytes per slot after division.
+# TOML only; no env override.
+queue_bytes = 33554432
+
+# Maximum query duration per index in milliseconds, 1..300000.
+# TOML only; no env override.
+query_timeout_ms = 5000
+
+# Maximum materialized query result size in bytes per query, 1024..67108864.
+# TOML only; no env override.
+max_query_bytes = 8388608
+
+# Maximum rows archived in one batch per index, 1..1000000.
+# TOML only; no env override.
+archive_batch_rows = 100000
+
+# Time partition width for Parquet archives in milliseconds, 1..86400000.
+# TOML only; no env override.
+archive_partition_ms = 3600000
+
+# Maximum Parquet files selected for a compaction per index, 2..256.
+# TOML only; no env override.
+compact_max_files = 16
+
+# Maximum combined input bytes selected for a compaction per index,
+# 1024..8589934592. TOML only; no env override.
+compact_max_bytes = 134217728
+
+# Maximum storage maintenance operation duration per index in milliseconds,
+# 1..300000. TOML only; no env override.
+maintenance_timeout_ms = 30000
+
+# Optional alternative global per-index disk footprint target in bytes; minimum
+# 16777216 (16 MiB). Default: disabled. Remove top-level max_size_gb above to use
+# this TOML value. Env: LOGBROOK_MAX_SIZE_BYTES sets this and clears max_size_gb;
+# LOGBROOK_MAX_SIZE_GB sets the alias instead. Do not set both env vars.
+# max_size_bytes = 20000000000
+
+# Bearer token -> fixed ingestion source. At least one ingest token is required.
+# Tokens must be 16..512 visible ASCII characters without whitespace, cannot start with replace-with-,
+# and must differ from read/admin tokens. Sources allow 1..128 ASCII letters,
+# digits, hyphens, underscores, or periods. Env: LOGBROOK_INGEST_TOKEN replaces
+# this entire map with one token. LOGBROOK_SOURCE supplies that token's source,
+# defaulting to "default" when unset; it has no effect without the ingest env token.
+[ingest_tokens]
+# Example producer credential and its assigned source; replace the credential.
+"replace-with-random-write-token" = "default"
+
+# Bearer token -> permitted source list. At least one read token is required;
+# credentials follow the same validation as ingest tokens. [] grants all sources.
+# Env: LOGBROOK_READ_TOKEN adds/replaces one entry without clearing other entries.
+# LOGBROOK_READ_SOURCES is a comma-separated source list; empty grants all sources.
+# Splitting does not trim whitespace. It has no effect without LOGBROOK_READ_TOKEN.
+# If READ_SOURCES is unset: an empty TOML map grants all sources; an existing token
+# keeps its configured source list; adding a new token to a nonempty map fails.
+# To use a new env read token with this example, explicitly set READ_SOURCES and
+# replace/remove the placeholder below; the env token does not remove that entry.
+[read_tokens]
+# Example read credential with access to every source; replace the credential.
+"replace-with-random-reader-token" = []
+
+# Named tables precreate indexes at startup and optionally override global policies.
+# Names: 1..63 lowercase ASCII letters, digits, hyphens, or underscores, starting
+# with a letter or digit. The default index always exists and counts toward max_indexes.
+# Env: LOGBROOK_INDEXES adds comma-separated names, preserving existing tables and
+# their policies. Empty entries are ignored; whitespace is not trimmed. There are
+# no per-index env policy overrides. Omitted fields inherit resolved global policy.
+[indexes.payments]
+# Payments retention in days; overrides global retention, including env settings.
+# TOML only; no env override. Use this or retention_ms, never both in one index.
+retention_days = 30
+# Payments disk target in decimal GB; overrides global size, including env settings.
+# TOML only; no env override. Use this or max_size_bytes, never both in one index.
+max_size_gb = 20
+# Alternative payments retention in milliseconds; must exceed its archive age.
+# TOML only; no env override. Remove retention_days before enabling.
+# retention_ms = 2592000000
+# Payments archival age in milliseconds, positive and shorter than retention.
+# Omitted inherits global archive_after_ms. TOML only; no env override.
+# archive_after_ms = 86400000
+# Alternative payments disk target in bytes, >= 16777216. TOML only; no env override.
+# Remove max_size_gb before enabling.
+# max_size_bytes = 20000000000
+
+# Audit index also inherits every policy field not explicitly supplied below.
+[indexes.audit]
+# Audit retention in days; overrides global retention, including env settings.
+# TOML only; no env override. Use this or retention_ms, never both in one index.
+retention_days = 90
+# Audit disk target in decimal GB; overrides global size, including env settings.
+# TOML only; no env override. Use this or max_size_bytes, never both in one index.
+max_size_gb = 5
+
+# Optional bearer token -> permitted ingestion index list. Missing entries or []
+# grant all indexes; the token's fixed source above still applies. Each key must
+# match a configured ingest token. If the env ingest token replaces the map,
+# update/remove scopes for displaced tokens or validation fails.
+# TOML only; no env override. Uncomment the table and entry together to enable.
+# [ingest_index_scopes]
+# Example: allow the matching producer credential to ingest only into payments.
+# "replace-with-random-write-token" = ["payments"]
+
+# Optional bearer token -> permitted read index list. Missing entries or [] grant
+# all indexes; read source scopes still apply. Each key must match a configured
+# read token. LOGBROOK_READ_SOURCES changes source scope, not index scope.
+# TOML only; no env override. Uncomment the table and entry together to enable.
+# [read_index_scopes]
+# Example: allow the matching reader credential to read payments and audit.
+# "replace-with-random-reader-token" = ["payments", "audit"]

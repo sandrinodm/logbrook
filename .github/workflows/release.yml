@@ -1,0 +1,163 @@
+name: Release image
+run-name: Release ${{ inputs.tag }} to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag matching Cargo.toml (for example v0.1.0)
+        required: true
+        type: string
+      update_latest:
+        description: Also update latest (stable versions only)
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+# Serialize publication so two releases cannot race to update latest.
+concurrency:
+  group: release-image
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+      image: ${{ steps.release.outputs.image }}
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          UPDATE_LATEST: ${{ inputs.update_latest }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || (( ${#RELEASE_TAG} > 128 )); then
+            echo '::error::Use an existing vX.Y.Z or vX.Y.Z-prerelease tag.'
+            exit 1
+          fi
+          if [[ "$UPDATE_LATEST" == true && "$RELEASE_TAG" == *-* ]]; then
+            echo '::error::A prerelease cannot update latest.'
+            exit 1
+          fi
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Resolve release commit and version
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          version=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "logbrook") | .version')
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo '::error::The tag must match the Logbrook package version in Cargo.toml.'
+            exit 1
+          fi
+          {
+            echo "commit=$(git rev-parse HEAD)"
+            echo "version=$version"
+            echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+
+  publish:
+    needs: [prepare, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.prepare.outputs.image }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: logbrook-*-oci
+          merge-multiple: true
+          path: ${{ runner.temp }}/oci
+      - name: Install OCI transfer tool
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+      - name: Authenticate to GHCR
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-release"
+          echo "DOCKER_CONFIG=$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          mkdir -p "$DOCKER_CONFIG"
+          chmod 700 "$DOCKER_CONFIG"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish verified OCI artifacts by digest
+        run: |
+          for architecture in amd64 arm64; do
+            archive="$RUNNER_TEMP/oci/logbrook-$architecture.tar"
+            manifest="$RUNNER_TEMP/$architecture-manifest.json"
+            skopeo inspect --raw "oci-archive:$archive" > "$manifest"
+            digest=$(skopeo manifest-digest "$manifest")
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+            # Copy every manifest, including SBOM and provenance attestations.
+            # Digest-only publication does not move any existing release tag.
+            skopeo copy --all --preserve-digests --authfile "$DOCKER_CONFIG/config.json" \
+              "oci-archive:$archive" "docker://$IMAGE@$digest"
+            echo "$IMAGE@$digest" >> "$RUNNER_TEMP/release-digests.txt"
+          done
+      - name: Assemble versioned multi-platform image
+        run: |
+          mapfile -t images < "$RUNNER_TEMP/release-digests.txt"
+          docker buildx imagetools create --dry-run "${images[@]}" > "$RUNNER_TEMP/candidate.json"
+          jq -e '[.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]' "$RUNNER_TEMP/candidate.json"
+          jq -e '[.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length >= 2' "$RUNNER_TEMP/candidate.json"
+
+          # A failed publish job can be retried with the same verified artifacts.
+          # Existing version tags must never be changed to different content.
+          if skopeo inspect --raw --authfile "$DOCKER_CONFIG/config.json" "docker://$IMAGE:$VERSION" > "$RUNNER_TEMP/existing.json" 2> "$RUNNER_TEMP/inspect-error"; then
+            if ! diff -u <(jq -S . "$RUNNER_TEMP/existing.json") <(jq -S . "$RUNNER_TEMP/candidate.json"); then
+              echo '::error::This version already contains a different image. Release a new version.'
+              exit 1
+            fi
+          elif ! grep -Eqi 'manifest unknown|name unknown|MANIFEST_UNKNOWN|NAME_UNKNOWN' "$RUNNER_TEMP/inspect-error"; then
+            cat "$RUNNER_TEMP/inspect-error" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" --tag "$IMAGE:sha-$RELEASE_COMMIT" "${images[@]}"
+          docker buildx imagetools inspect "$IMAGE:$VERSION" --raw > "$RUNNER_TEMP/published.json"
+          diff -u <(jq -S . "$RUNNER_TEMP/candidate.json") <(jq -S . "$RUNNER_TEMP/published.json")
+      - name: Update latest
+        if: inputs.update_latest
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION"
+      - name: Summarize release
+        env:
+          UPDATE_LATEST: ${{ inputs.update_latest }}
+        run: |
+          {
+            echo "Published \`$IMAGE:$VERSION\` for Linux amd64 and arm64."
+            echo
+            echo "Commit: \`$RELEASE_COMMIT\`. SBOM and provenance attestations are included."
+            if [[ "$UPDATE_LATEST" == true ]]; then
+              echo
+              echo "Updated \`$IMAGE:latest\`."
+            fi
+            echo
+            echo 'The GHCR package may need its visibility changed to public after its first publication.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove registry credentials
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/docker-release"

@@ -1,0 +1,33 @@
+[package]
+name = "logbrook-dev"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Development checks and load generators for Logbrook"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "logbrook-dev"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+clap = { version = "4.5", features = ["derive"] }
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util", "process"] }
+toml = "1.1.6"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_macros = "deny"

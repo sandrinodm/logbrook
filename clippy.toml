@@ -1,0 +1,7 @@
+# Command results go through cli_output; runtime diagnostics use tracing.
+# Enforce the output rule for new code instead of relying on review memory.
+disallowed-macros = [
+  { path = "std::println", reason = "write command results through cli_output::line; use tracing for diagnostics" },
+  { path = "std::print", reason = "write command results through cli_output::line; use tracing for diagnostics" },
+  { path = "std::dbg", reason = "use structured tracing diagnostics" },
+]

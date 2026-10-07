@@ -1,0 +1,39 @@
+services:
+  logbrook:
+    build: .
+    ports:
+      - "127.0.0.1:3100:3100"
+    environment:
+      # Required bearer credential for ingestion; replaces the ingest token map.
+      LOGBROOK_INGEST_TOKEN: ${LOGBROOK_INGEST_TOKEN:?Set a random ingestion token}
+      # Required separate bearer credential for reading; defaults to all sources.
+      LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set a different random read token}
+      # Optional management credential; omitted from the container when unset.
+      LOGBROOK_ADMIN_TOKEN:
+      # Source assigned to events written with LOGBROOK_INGEST_TOKEN.
+      LOGBROOK_SOURCE: ${LOGBROOK_SOURCE:-default}
+      # Default per-index retention in days; must exceed the archive age.
+      LOGBROOK_RETENTION_DAYS: ${LOGBROOK_RETENTION_DAYS:-7}
+      # Default disk footprint target per index in decimal GB; size pressure expires older events.
+      LOGBROOK_MAX_SIZE_GB: ${LOGBROOK_MAX_SIZE_GB:-20}
+      # Maximum index slots, including default; storage budgets divide across these slots.
+      LOGBROOK_MAX_INDEXES: ${LOGBROOK_MAX_INDEXES:-4}
+      # Comma-separated indexes to precreate; merges with any indexes configured in TOML.
+      LOGBROOK_INDEXES: ${LOGBROOK_INDEXES:-default}
+      # Default event age in milliseconds before archiving to Parquet (86400000 = one day).
+      LOGBROOK_ARCHIVE_AFTER_MS: ${LOGBROOK_ARCHIVE_AFTER_MS:-86400000}
+      # Seconds between retention, archival, and compaction maintenance passes.
+      LOGBROOK_MAINTENANCE_INTERVAL_SECS: ${LOGBROOK_MAINTENANCE_INTERVAL_SECS:-60}
+    volumes:
+      - logs:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 35s
+volumes:
+  logs:

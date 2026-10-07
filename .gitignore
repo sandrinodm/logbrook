@@ -1,0 +1,35 @@
+# Rust patterns from https://github.com/github/gitignore/blob/main/Rust.gitignore
+# Cargo build output
+debug
+target
+
+# Formatter backups and Windows debugging symbols
+**/*.rs.bk
+*.pdb
+
+# Mutation testing output and compiler crash reports
+**/mutants.out*/
+rustc-ice-*.txt
+
+# Optional JetBrains settings exclusion; prefer a personal global ignore file.
+# .idea/
+
+# Keep Cargo.lock: Logbrook is an application with reproducible builds.
+
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+*.local.toml
+
+# Logbrook data and generated reports
+/data/
+/artifacts/
+/coverage/
+
+# JavaScript dependencies and build output
+/node_modules/
+/dist/
+
+# macOS metadata
+.DS_Store

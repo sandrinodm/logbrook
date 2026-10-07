@@ -1,0 +1,17 @@
+# License choices for the published Linux executable. Keep both image targets
+# here so notice generation produces the same result on every build host.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "ISC",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+workarounds = ["ring", "rustix", "chrono"]
