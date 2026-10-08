@@ -19,6 +19,12 @@ Logbrook is a single Rust executable that receives JSON logs over HTTP, stores r
 - **Offline import** of Pino JSON or NDJSON files.
 - **Operations support**: Prometheus metrics, health and readiness endpoints, and a hardened container image.
 
+## How it works
+
+Applications send logs to Logbrook over HTTP. Each index stores recent logs in embedded DuckDB and archives older logs as local Parquet files. The CLI and other applications query both through Logbrook's HTTP API.
+
+<img src="docs/assets/logbrook-architecture.webp" alt="Web apps, APIs, and workers send logs to Logbrook. Recent logs are stored in DuckDB and archived to Parquet files. The CLI and other apps send queries to Logbrook and receive results from both stores." width="800">
+
 ## Quick start
 
 These steps build Logbrook from source and run it in the foreground on `127.0.0.1:3100`. Run every command from the repository root.
