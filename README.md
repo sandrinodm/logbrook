@@ -269,6 +269,7 @@ The Pino example has its own tests and requires Node.js 24 with npm:
 - [Container packaging](docs/CONTAINER.md): image contents, hardening, and verification.
 - [Publishing images](docs/RELEASING.md): the separate GHCR release workflow and version tags.
 - [Pino example](examples/pino-logger/README.md): sending logs from Node.js.
+- [Agent skill](skills/logbrook/SKILL.md): Docker installation, application logging, and log investigations. Copy the whole `skills/logbrook` directory into your agent's skill directory, or point the agent at its `SKILL.md` in this checkout.
 
 ## Contributing
 

@@ -1,0 +1,43 @@
+services:
+  logbrook:
+    # Use a published version/digest, or an image built locally from the repository.
+    image: ${LOGBROOK_IMAGE:?Set LOGBROOK_IMAGE to a published or locally built image}
+    ports:
+      - "127.0.0.1:3100:3100"
+    environment:
+      # Listen on the container network; the host port remains loopback-only above.
+      LOGBROOK_BIND: 0.0.0.0:3100
+      # Persist all indexes in the named volume.
+      LOGBROOK_DATA_DIR: /data
+      # Credential used by applications to write logs.
+      LOGBROOK_INGEST_TOKEN: ${LOGBROOK_INGEST_TOKEN:?Set a random ingestion token}
+      # Separate credential used by query clients.
+      LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set a different random read token}
+      # Source assigned to every event written with this ingestion token.
+      LOGBROOK_SOURCE: ${LOGBROOK_SOURCE:-apps}
+      # Default retention in days for each index; must exceed the archive age.
+      LOGBROOK_RETENTION_DAYS: ${LOGBROOK_RETENTION_DAYS:-7}
+      # Per-index disk footprint target in decimal GB, not a hard filesystem quota.
+      LOGBROOK_MAX_SIZE_GB: ${LOGBROOK_MAX_SIZE_GB:-20}
+      # Total index slots, including default; shared storage budgets divide by this.
+      LOGBROOK_MAX_INDEXES: ${LOGBROOK_MAX_INDEXES:-4}
+      # Precreate these indexes; default always exists as well.
+      LOGBROOK_INDEXES: ${LOGBROOK_INDEXES:-apps}
+      # Move events older than one day into searchable Parquet archives.
+      LOGBROOK_ARCHIVE_AFTER_MS: ${LOGBROOK_ARCHIVE_AFTER_MS:-86400000}
+      # Seconds between archival, retention, and compaction passes.
+      LOGBROOK_MAINTENANCE_INTERVAL_SECS: ${LOGBROOK_MAINTENANCE_INTERVAL_SECS:-60}
+    volumes:
+      - logs:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 35s
+
+volumes:
+  logs:

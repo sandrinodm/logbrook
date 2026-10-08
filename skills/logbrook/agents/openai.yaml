@@ -1,0 +1,4 @@
+interface:
+  display_name: "Logbrook"
+  short_description: "Deploy Logbrook, ship logs, and investigate events"
+  default_prompt: "Use $logbrook to set up log collection for my applications and investigate their logs."

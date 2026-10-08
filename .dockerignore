@@ -53,6 +53,7 @@ README.md
 # Documentation, examples, and development tools are not build inputs.
 /.github
 /docs
+/skills
 /examples
 /tests
 /xtask/src
