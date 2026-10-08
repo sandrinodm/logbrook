@@ -267,7 +267,7 @@ The Pino example has its own tests and requires Node.js 24 with npm:
 - [Query cookbook](docs/QUERY-EXAMPLES.md): CLI and HTTP recipes with a reproducible demo dataset.
 - [Operations and migration](docs/OPERATIONS.md): limits, retention, backups, upgrades, and imports.
 - [Container packaging](docs/CONTAINER.md): image contents, hardening, and verification.
-- [Publishing images](docs/RELEASING.md): the separate GHCR release workflow and version tags.
+- [Releases and images](docs/RELEASING.md): automated versioning, Git tags, GitHub releases, and GHCR publication.
 - [Pino example](examples/pino-logger/README.md): sending logs from Node.js.
 - [Agent skill](skills/logbrook/SKILL.md): Docker installation, application logging, and log investigations. Copy the whole `skills/logbrook` directory into your agent's skill directory, or point the agent at its `SKILL.md` in this checkout.
 

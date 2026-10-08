@@ -1,0 +1,156 @@
+name: Release
+run-name: Release ${{ inputs.version }} from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: current (first release), patch, minor, major, or an explicit version
+        default: current
+        required: true
+        type: string
+      update_latest:
+        description: Also mark a stable release as latest in GHCR and GitHub
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    name: Prepare version and tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Require main
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo '::error::Create releases from main.'
+            exit 1
+          fi
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          # This job pushes the version commit and tag atomically.
+          persist-credentials: true
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - name: Prepare release
+        id: release
+        env:
+          VERSION_REQUEST: ${{ inputs.version }}
+          UPDATE_LATEST: ${{ inputs.update_latest }}
+        run: |
+          git fetch origin main --tags
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+            echo '::error::main advanced after this run started. Start a new release run.'
+            exit 1
+          fi
+
+          cargo xtask release-version --dry-run -- "$VERSION_REQUEST" > "$RUNNER_TEMP/release.json"
+          version=$(jq -er .version "$RUNNER_TEMP/release.json")
+          tag=$(jq -er .tag "$RUNNER_TEMP/release.json")
+          if [[ "$UPDATE_LATEST" == true && "$version" == *-* ]]; then
+            echo '::error::A prerelease cannot update latest.'
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "::error::Tag $tag already exists. Retry failed jobs in its original run or select a new version."
+            exit 1
+          fi
+
+          cargo xtask release-version -- "$VERSION_REQUEST"
+          resolved=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "logbrook") | .version')
+          test "$resolved" = "$version"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock THIRD_PARTY_NOTICES.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): $tag"
+          fi
+          git tag --annotate "$tag" --message "Logbrook $version"
+          # A concurrent main update or an existing remote tag rejects both refs.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$tag"
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "commit=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Verify and publish image
+    needs: prepare
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      update_latest: ${{ inputs.update_latest }}
+      expected_commit: ${{ needs.prepare.outputs.commit }}
+
+  github-release:
+    name: Publish GitHub release
+    needs: [prepare, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+      UPDATE_LATEST: ${{ inputs.update_latest }}
+    steps:
+      - name: Create release with generated notes
+        run: |
+          repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/$repository:$VERSION"
+          {
+            echo "Container image: \`$image\` (Linux amd64 and arm64)."
+            echo
+            echo "Source commit: \`$RELEASE_COMMIT\`. SBOM and provenance attestations are included."
+            echo
+            echo '```sh'
+            echo "docker pull $image"
+            echo '```'
+          } > "$RUNNER_TEMP/release-notes.md"
+
+          # A lost response after creation must not create or replace a second release.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url > "$RUNNER_TEMP/existing-release.json"; then
+            jq -e '.isDraft == false' "$RUNNER_TEMP/existing-release.json"
+            url=$(jq -er .url "$RUNNER_TEMP/existing-release.json")
+          else
+            options=(--verify-tag --title "$TAG" --generate-notes --notes-file "$RUNNER_TEMP/release-notes.md" --latest="$UPDATE_LATEST")
+            if [[ "$VERSION" == *-* ]]; then
+              options+=(--prerelease)
+            fi
+            url=$(gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${options[@]}")
+          fi
+
+          {
+            echo "GitHub release: $url"
+            echo
+            echo "Container image: \`$image\`."
+            echo
+            echo 'For the first publication, make the GHCR package public to enable anonymous pulls.'
+          } >> "$GITHUB_STEP_SUMMARY"

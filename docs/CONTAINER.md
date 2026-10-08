@@ -65,8 +65,9 @@ GitHub runners. A Docker-container BuildKit builder exports an OCI archive with
 SBOM and maximum provenance attestations, then loads the same cached build into
 Docker for smoke tests. The OCI archive is retained for seven days as a CI
 artifact; normal verification does not publish to a registry. The separate
-[Release image workflow](RELEASING.md) invokes the same checks for an exact tagged
-commit and publishes their verified OCI artifacts to GHCR. The OCI exporter retains attestations,
+[release workflow](RELEASING.md) creates the version tag, invokes the same checks
+for its exact commit, and publishes the verified OCI artifacts to GHCR before
+creating a GitHub release. The OCI exporter retains attestations,
 whereas loading into the classic Docker image store can discard them; see
 [Docker's attestation documentation](https://docs.docker.com/build/metadata/attestations/).
 

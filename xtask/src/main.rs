@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use logbrook_dev::{Result, container, extended, load, notices};
+use logbrook_dev::{Result, container, extended, load, notices, release};
 use std::io::Write;
 
 #[derive(Parser)]
@@ -19,6 +19,8 @@ enum Commands {
     MixedLoad(load::mixed::Args),
     IndexLoad(load::index::Args),
     Notices(notices::Args),
+    /// Prepare the application version and release metadata without committing or publishing.
+    ReleaseVersion(release::Args),
     Version,
 }
 
@@ -58,6 +60,7 @@ async fn run_command(command: Commands) -> Result<()> {
         Commands::IndexLoad(args) => load::index::run(args).await,
         Commands::ExtendedLoad(args) => extended::run(args).await,
         Commands::Notices(args) => notices::run(args).await,
+        Commands::ReleaseVersion(args) => release::run(args),
         Commands::Version => {
             let manifest: toml::Value = toml::from_str(include_str!("../../Cargo.toml"))?;
             let version = manifest["package"]["version"]

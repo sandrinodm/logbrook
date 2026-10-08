@@ -22,4 +22,5 @@ pub mod container;
 pub mod extended;
 pub mod load;
 pub mod notices;
+pub mod release;
 pub mod runtime;

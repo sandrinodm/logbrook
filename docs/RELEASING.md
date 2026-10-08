@@ -1,45 +1,38 @@
-# Publishing container images
+# Releases and container images
 
-The **Release image** GitHub Actions workflow publishes to GitHub Container Registry (GHCR). It runs manually, separately from normal verification. Pushing a commit or tag does not publish an image.
+The manual **Release** GitHub Actions workflow prepares the application version, creates and pushes its Git tag, verifies and publishes the container image, then creates a GitHub release with generated notes. The separate **Release image** workflow remains available for publishing an existing tag. Normal pushes and pull requests run verification only.
 
 Images use `ghcr.io/<owner>/<repository>`, with both names lowercased. A release publishes one image supporting `linux/amd64` and `linux/arm64`, including dependency notices, an SBOM, and build provenance.
 
 ## Repository setup
 
-1. Push the repository, including both workflows under `.github/workflows/`, to GitHub. The release workflow must exist on the default branch for its **Run workflow** button to appear.
-2. Ensure the repository or organization permits GitHub Actions to publish packages. Only the publishing job requests `packages: write`; verification jobs have read-only repository access.
+1. Push the repository, including `.github/workflows/create-release.yml`, to `main`. The workflow must exist on the default branch for its **Run workflow** button to appear.
+2. Allow GitHub Actions to write repository contents and publish packages. Repository rules must permit the release job to push its version commit to `main` and create tags. If a rule blocks the bot, resolve that repository policy before releasing; the workflow does not bypass protection or force-push.
 3. If the GHCR package already exists, connect it to this repository and grant the repository Actions access to it.
 
-The workflow uses the built-in `GITHUB_TOKEN`. No Docker Hub account, personal access token, or registry secret is required. See [GitHub's registry authentication guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-in-a-github-actions-workflow).
+The workflows use the built-in `GITHUB_TOKEN`. Only version/tag preparation and GitHub release creation request `contents: write`; only image publication requests `packages: write`. Verification is read-only. No Docker Hub account, personal access token, or registry secret is required. See [GitHub's registry authentication guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-in-a-github-actions-workflow).
 
-## Prepare a version
+## Create a release
 
-Set the application version in the root `Cargo.toml`. Keep `Cargo.lock` and the distributed notices current:
+1. Commit and push the intended changes to `main`.
+2. Open **Actions → Release → Run workflow** and select `main`.
+3. Enter a version request from the table below. For the first `0.1.0` release, use **`current`**.
+4. Enable **Also mark a stable release as latest** if it should update both the GHCR `latest` tag and GitHub's latest-release designation.
+5. Run the workflow. It handles version files, the tag, image publication, and the GitHub release.
 
-```sh
-cargo check --package logbrook
-cargo xtask notices
-cargo xtask notices --check
-```
+| Version request | Result when Cargo.toml contains `0.1.0` |
+| --- | --- |
+| `current` | Release `0.1.0` without a version bump |
+| `patch` | Release `0.1.1` |
+| `minor` | Release `0.2.0` |
+| `major` | Release `1.0.0` |
+| `0.2.0-rc.1` | Release that exact prerelease version |
 
-Notice generation requires the tool described in [license maintenance](../licenses/README.md). Commit the release changes, then create and push an annotated tag matching the application version. For the current `0.1.0` version:
+Explicit versions omit the leading `v`. Downgrades, build metadata such as `+build.1`, and existing tags are rejected. To promote a prerelease, specify its intended stable version explicitly. Prereleases cannot be marked latest. Version selection is manual; Conventional Commit messages do not automatically choose an increment.
 
-```sh
-git tag -a v0.1.0 -m 'Logbrook 0.1.0'
-git push origin v0.1.0
-```
+The preparation job updates the root `Cargo.toml`, its application entry in `Cargo.lock`, and the lockfile fingerprint in `THIRD_PARTY_NOTICES.txt`. A version-only update leaves dependency versions and license texts untouched. Existing notices must already match the lockfile; dependency updates still require [normal notice regeneration](../licenses/README.md). Changed files are committed as `chore(release): v<version>`. For `current`, no empty version commit is created.
 
-Use `vX.Y.Z` for a stable version or `vX.Y.Z-rc.1` for a prerelease. Build metadata such as `+build.1` is not supported in release tags. Treat version tags as permanent; publish a new version for changed code.
-
-## Run the release
-
-1. Open **Actions → Release image → Run workflow**.
-2. Select the default branch as the workflow source.
-3. Enter the existing tag, for example `v0.1.0`.
-4. Enable **Also update latest** only when this stable release should become the default image.
-5. Run the workflow and wait for `prepare`, `verify`, and `publish` to succeed.
-
-The workflow checks that the tag matches `Cargo.toml`, resolves it to an exact commit, and runs the existing verification workflow against that commit. This includes Rust and Pino checks, license notices, and native container builds and smoke tests for both architectures.
+The version commit and annotated tag are pushed together with an atomic, non-forced Git push. If `main` advances while preparing, or the tag already exists, preparation fails instead of overwriting another change. The image workflow checks the tag against both the prepared commit and package version, then runs Rust and Pino checks, full notice verification, and native container builds and smoke tests for both architectures.
 
 Publication starts only after every verification job passes. It transfers the verified OCI archives by digest and combines their manifests without rebuilding. The archive's image configuration is checked against the locally tested image before upload. Skopeo copies all manifests with digest preservation, retaining SBOM and provenance attestations; Docker Buildx assembles the multi-platform image. See [Skopeo's copy options](https://github.com/containers/skopeo/blob/main/docs/skopeo-copy.1.md) and [Docker's image-copying guidance](https://docs.docker.com/build/ci/github-actions/copy-image-registries/).
 
@@ -51,7 +44,35 @@ The resulting tags are:
 | `sha-<full-commit>` | The source commit used by this release |
 | `latest` | Updated only when explicitly selected for a stable version |
 
-Prereleases cannot update `latest`. Existing version tags are accepted only when their manifest matches the verified artifacts exactly. If the publishing job fails transiently, use **Re-run failed jobs** to reuse those same artifacts. Re-running every job may produce different provenance; use a new release version rather than replacing an existing image.
+After successful image publication, the final job creates `v<version>` in GitHub Releases with generated notes and a container pull command. It marks prereleases appropriately. Image publication is a direct reusable-workflow call, so it does not depend on a bot-created tag or release triggering another workflow. See [GitHub's reusable-workflow guidance](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows) and [token-trigger behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+## Preview or prepare a version locally
+
+The release helper is part of the Rust development tools:
+
+```sh
+cargo xtask release-version --dry-run current
+cargo xtask release-version --dry-run patch
+cargo xtask release-version --dry-run 0.2.0-rc.1
+```
+
+It emits JSON containing the old version, target version, tag, and whether files would change. Removing `--dry-run` updates the three version-related files locally. This helper does not commit, tag, push, create a GitHub release, or publish an image. The Actions workflow owns those steps.
+
+## Retry a failed release
+
+Use **Re-run failed jobs** in the original run. A tag is reserved before verification, so a failed build leaves that tag in place even though no GitHub release has been announced. Re-running failed jobs preserves the prepared version and reuses successful jobs and available artifacts. Do not delete or move the tag to work around a failure.
+
+If code changes are needed, commit the fix and start a new release with a new version. Re-running all jobs or starting another release at `current` can encounter an existing tag; a fresh `patch` run can create another version. Choose intentionally rather than repeatedly retrying the whole release.
+
+If image publication fails transiently, retry its failed job with the same verified artifacts. Existing image versions are accepted only when their manifests match exactly; rebuilding can change provenance even for the same source. OCI artifacts are retained for seven days. If they are no longer available, prepare a new version instead of replacing a published image.
+
+If only GitHub release creation fails, retry that final job. An already published GitHub release for the tag is accepted, so a lost API response does not require another image publication.
+
+## Publish an existing tag
+
+The **Release image** workflow is an image-only path for an existing, pushed Git tag matching the root application version. It verifies and publishes that tag, with an optional stable `latest` update. It neither creates the tag nor creates a GitHub release.
+
+An error such as `couldn't find remote ref refs/tags/v0.1.0` means the selected Git tag is absent on the remote. For a new release, use **Release** with `current` or an increment rather than entering an uncreated tag into **Release image**.
 
 ## Make the first package public
 

@@ -2,6 +2,20 @@ name: Release image
 run-name: Release ${{ inputs.tag }} to GHCR
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing version tag matching Cargo.toml
+        required: true
+        type: string
+      update_latest:
+        description: Also update latest for a stable version
+        default: false
+        type: boolean
+      expected_commit:
+        description: Exact commit prepared by the calling release workflow
+        default: ''
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -55,14 +69,20 @@ jobs:
         id: release
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
         run: |
+          commit=$(git rev-parse HEAD)
+          if [[ -n "$EXPECTED_COMMIT" && "$commit" != "$EXPECTED_COMMIT" ]]; then
+            echo '::error::The release tag no longer points to the prepared commit.'
+            exit 1
+          fi
           version=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "logbrook") | .version')
           if [[ "$RELEASE_TAG" != "v$version" ]]; then
             echo '::error::The tag must match the Logbrook package version in Cargo.toml.'
             exit 1
           fi
           {
-            echo "commit=$(git rev-parse HEAD)"
+            echo "commit=$commit"
             echo "version=$version"
             echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
           } >> "$GITHUB_OUTPUT"

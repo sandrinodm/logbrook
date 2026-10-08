@@ -18,9 +18,15 @@ Run commands from the repository root. Native process checks use temporary data 
 
 The [development checks](../README.md#development) and [container verification](../docs/CONTAINER.md#local-verification) list the full commands. `cargo xtask check-cli --binary target/debug/logbrook` also runs the management CLI check against a disposable native server. `cargo xtask version` reads the application version from the root manifest for image packaging.
 
-The separate [image release workflow](../docs/RELEASING.md) runs these checks for a tagged commit before publishing its verified container artifacts to GHCR.
+The [release workflow](../docs/RELEASING.md) prepares a version and tag, runs these checks, publishes the verified container artifacts to GHCR, and creates a GitHub release.
 
 Notice generation requires the pinned `cargo-about` tool. See [license maintenance](../licenses/README.md) for setup and updates. This tool is used only by maintainers and CI; source builds and Docker builds use the checked-in notices.
+
+## Release versions
+
+`cargo xtask release-version --dry-run patch` previews the next version without changing files. Accepts `current`, `patch`, `minor`, `major`, or an explicit SemVer value such as `0.2.0-rc.1`. Use an explicit stable version to promote a prerelease. Without `--dry-run`, it updates the application manifest, lockfile entry, and notice fingerprint, preserving dependency versions, manifest comments, and license text. Stale notices and downgrades are rejected before writing.
+
+This helper prepares files only. The manual **Release** Actions workflow performs the commit, atomic tag push, verification, image publication, and GitHub release creation. Use `current` for the initial release of the version already in `Cargo.toml`.
 
 ## Load generators
 

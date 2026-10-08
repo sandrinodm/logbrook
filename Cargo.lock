@@ -1400,6 +1400,7 @@ dependencies = [
  "clap",
  "futures-util",
  "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
