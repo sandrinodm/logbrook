@@ -8,7 +8,7 @@ Use the [HTTP CLI](CLI.md) to list index sizes, create indexes, query events, or
 
 The database allocates persistent IDs in the same transaction as events. Readers use separate connections and a transaction containing both hot data and the archive manifest. Short snapshot-registration and manifest-publication critical sections establish generation leases. A long reader keeps its files alive without holding the writer lock; newer readers do not indefinitely pin retired files. Maintenance reclaims eligible files outside the publication lock. Export, compaction and expiry discovery run on the maintenance connection; short manifest/deletion transactions use the writer.
 
-Archive files use relative manifest paths so a complete data directory can be relocated. Temporary or unreferenced `.tmp`/`.parquet` files in the dedicated archive directory are removed at startup; failed unpublished exports are also cleaned during operation. Missing committed files, unexpected byte lengths, or unsupported archive schemas are integrity failures. Data/import paths containing DuckDB glob characters are rejected. Keep unrelated files out of the archive directory. Bundled JSON/Parquet support is included; automatic extension installation and loading are disabled.
+Archive files use relative manifest paths so a complete data directory can be relocated. Temporary or unreferenced `.tmp`/`.parquet` files in the dedicated archive directory are removed at startup; failed unpublished exports are also cleaned during operation. Missing committed files, unexpected byte lengths, or unsupported archive schemas are integrity failures. Data directory paths containing DuckDB glob characters are rejected. Keep unrelated files out of the archive directory. Bundled JSON/Parquet support is included; automatic extension installation and loading are disabled.
 
 The native tests and SIGKILL test exercise application errors and process crashes. They do not establish power-loss guarantees for the underlying disk, filesystem, or virtual machine.
 
@@ -122,39 +122,9 @@ target/release/logbrook --config logbrook.local.toml --index payments import eve
 
 Offline import and archive commands accept `--index <name>` (default `default`) and use the same named folder layout. Each batch commits independently. If a later batch is invalid or the process stops, prior batches remain. Restarting the whole import may duplicate those events. Use a new destination directory for a clean retry. Imports preserve event time, so configure retention to cover the imported history before starting the server.
 
-## Import a legacy DuckDB dataset
+## Archive events offline
 
-`import-legacy` reads a DuckDB database containing a `logs` table and, optionally, a directory of Parquet files with the same columns. It is a schema-specific importer, not an arbitrary SQL migration tool. The expected columns are:
-
-```sql
-CREATE TABLE logs (
-    timestamp TIMESTAMP,
-    level INTEGER,
-    service VARCHAR,
-    name VARCHAR,
-    hostname VARCHAR,
-    pid BIGINT,
-    msg VARCHAR,
-    metadata JSON
-);
-```
-
-`timestamp`, `level`, and `msg` must contain valid, non-null values for every imported event. Timestamps represent UTC instants and are converted to Unix milliseconds. `metadata` must be a JSON object or null. The other fields may be null, and additional table columns are ignored. The ordinary event-size, field-size, nesting, and severity validation rules still apply.
-
-Stop the source writer and obtain a consistent copy of the database, its WAL if present, and any archives. Import the copy into a new, offline Logbrook directory:
-
-```sh
-target/release/logbrook --config logbrook.local.toml import-legacy \
-  /absolute/path/to/offline-copy/logs.db \
-  --archives /absolute/path/to/offline-copy/partitions \
-  --source legacy
-```
-
-The importer opens the source database read-only and reads regular Parquet files recursively. Paths containing symlinks or glob characters are rejected; on macOS prefer canonical `/private/tmp/...` over the `/tmp` symlink. Core columns become canonical event fields and override colliding values in metadata. Other metadata fields are preserved as attributes. Source identity comes from `--source`, and Logbrook assigns new event IDs. Unique temporary import directories are removed on success and failure.
-
-If an event exists in both the database and an archive, both copies are imported. The importer does not deduplicate or modify source files. Each batch commits independently, so retrying after a partial failure can also create duplicates. Compare totals by day/service and sample full records before switching producers to the new destination. The separate legacy reader has its own configured native memory budget, so an offline import needs more headroom than ordinary ingestion.
-
-To force an offline archive round trip for verification:
+Stop the service before running an offline archive command. To move recent events into Parquet files for verification:
 
 ```sh
 target/release/logbrook --config logbrook.local.toml archive --before 1791321600000

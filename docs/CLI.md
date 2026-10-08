@@ -90,4 +90,4 @@ docker compose exec logbrook logbrook query checkout --since 1h
 docker compose exec logbrook logbrook indexes delete checkout --yes
 ```
 
-These commands inherit the container's configured role credentials. They use HTTP through loopback; no shell or extra runtime tools are required. Existing `serve`, `check-config`, `healthcheck`, `import`, `import-legacy`, and `archive` commands retain their server/offline behavior.
+These commands inherit the container's configured role credentials. They use HTTP through loopback; no shell or extra runtime tools are required. Existing `serve`, `check-config`, `healthcheck`, `import`, and `archive` commands retain their server/offline behavior.

@@ -53,15 +53,6 @@ enum Command {
         #[arg(long)]
         ndjson: bool,
     },
-    /// Import an offline DuckDB logs table and optional Parquet archives.
-    /// Optional archives are read recursively; retries can duplicate committed batches.
-    ImportLegacy {
-        database: PathBuf,
-        #[arg(long)]
-        archives: Option<PathBuf>,
-        #[arg(long)]
-        source: String,
-    },
     /// Archive events before a Unix millisecond timestamp in an offline data directory.
     Archive {
         #[arg(long)]
@@ -114,7 +105,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     if matches!(
         &cli.command,
-        Command::Archive { .. } | Command::Import { .. } | Command::ImportLegacy { .. }
+        Command::Archive { .. } | Command::Import { .. }
     ) {
         let (root, names) = logbrook::indexes::prepare_layout(&config.storage.data_dir)?;
         logbrook::config::validate_index_name(&cli.index)?;
@@ -165,26 +156,12 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli_output::line(format_args!("{}", serde_json::json!({"archived": result?})))?;
         }
 
-        Command::ImportLegacy {
-            database,
-            archives,
-            source,
-        } => {
-            logbrook::legacy::validate_source(&source)?;
-            let storage = Storage::open(config.storage.clone())?;
-            let result =
-                logbrook::legacy::import_legacy(&storage, &config, database, archives, source)
-                    .await;
-            storage.shutdown().await?;
-            cli_output::line(format_args!("{}", serde_json::json!({"imported": result?})))?;
-        }
-
         Command::Import {
             file,
             source,
             ndjson,
         } => {
-            logbrook::legacy::validate_source(&source)?;
+            logbrook::config::validate_source(&source)?;
             let storage = Storage::open(config.storage.clone())?;
             let result = import(&storage, &config, file, source, ndjson).await;
             storage.shutdown().await?;

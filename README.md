@@ -16,7 +16,7 @@ Logbrook is a single Rust executable that receives JSON logs over HTTP, stores r
 - **Live tail** over server-sent events, with replay after reconnects and an explicit notice when events were missed.
 - **Parquet archival** of older events, which stay searchable together with recent ones.
 - **CLI** in the same executable for querying, counting, and managing indexes on a running server.
-- **Offline import** of Pino JSON or NDJSON files and compatible legacy DuckDB databases with Parquet archives.
+- **Offline import** of Pino JSON or NDJSON files.
 - **Operations support**: Prometheus metrics, health and readiness endpoints, and a hardened container image.
 
 ## Quick start
