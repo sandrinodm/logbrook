@@ -13,6 +13,8 @@ services:
       LOGBROOK_INGEST_TOKEN: ${LOGBROOK_INGEST_TOKEN:?Set a random ingestion token}
       # Separate credential used by query clients.
       LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set a different random read token}
+      # Uncomment for administration, and set a separate nonempty token in .env.
+      # LOGBROOK_ADMIN_TOKEN: ${LOGBROOK_ADMIN_TOKEN:?Set a random admin token}
       # Source assigned to every event written with this ingestion token.
       LOGBROOK_SOURCE: ${LOGBROOK_SOURCE:-apps}
       # Default retention in days for each index; must exceed the archive age.

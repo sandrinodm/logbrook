@@ -22,16 +22,24 @@ Choose either Docker or Compose below for the instance. Both examples use host p
 
 ## Create configuration for a new instance
 
-In a dedicated deployment directory, create `.env` once. Reuse existing credentials for an existing instance. This command refuses to overwrite an existing file:
+In a dedicated deployment directory, create `.env` once. Reuse existing credentials for an existing instance. This command validates the image variable and generates both credentials before creating the file. It requires OpenSSL and refuses to overwrite an existing file:
 
 ```sh
 (
+  set -eu
+  : "${LOGBROOK_IMAGE:?Choose an image first}"
+  command -v openssl > /dev/null
+  ingest_token=$(openssl rand -hex 32)
+  read_token=$(openssl rand -hex 32)
+  test "${#ingest_token}" -eq 64
+  test "${#read_token}" -eq 64
+
   umask 077
   set -C
   cat > .env <<EOF
-LOGBROOK_IMAGE=${LOGBROOK_IMAGE:?Choose an image first}
-LOGBROOK_INGEST_TOKEN=$(openssl rand -hex 32)
-LOGBROOK_READ_TOKEN=$(openssl rand -hex 32)
+LOGBROOK_IMAGE=$LOGBROOK_IMAGE
+LOGBROOK_INGEST_TOKEN=$ingest_token
+LOGBROOK_READ_TOKEN=$read_token
 LOGBROOK_BIND=0.0.0.0:3100
 LOGBROOK_DATA_DIR=/data
 LOGBROOK_SOURCE=apps
@@ -46,6 +54,8 @@ EOF
 ```
 
 Keep `.env` out of version control. The ingest and read tokens are separate roles, not interchangeable credentials. Add an admin token only when index administration requires one; it is unnecessary for ordinary ingestion and queries.
+
+For administration, generate another credential with `openssl rand -hex 32` and store it as `LOGBROOK_ADMIN_TOKEN` in `.env`. Docker's `--env-file` forwards it automatically. With Compose, also uncomment the admin-token mapping in the bundled template, then recreate the service. Compose uses `.env` for interpolation and forwards only explicitly mapped variables; adding the token to `.env` alone does not enable administration. Leave the mapping commented when no admin token is configured, since an empty token is invalid.
 
 ## Docker
 
@@ -109,6 +119,14 @@ For distinct ingestion sources, scoped readers, or per-index policies, mount a T
 
 Use the fully commented [configuration example](https://github.com/sandrinodm/logbrook/blob/main/logbrook.example.toml) for exact keys. Replace every example credential before validation. Settings resolve as defaults, TOML, then supported environment overrides, with explicit per-index policies taking precedence over inherited global policies. When moving to multiple TOML ingestion tokens, remove the single-token environment setting: `LOGBROOK_INGEST_TOKEN` replaces the entire ingestion map. Read-token environment overrides add entries rather than clearing the TOML map; remove placeholders and explicitly configure source scopes.
 
-Validate a mounted configuration with `docker compose exec -T logbrook logbrook --config /etc/logbrook/config.toml check-config` before recreating the server. Shortening retention can delete history on the next maintenance pass; increasing it cannot recover expired data.
+After editing the Compose mounts, environment, and TOML file, validate the proposed configuration in a fresh one-off container before recreating the server:
+
+```sh
+docker compose config --quiet
+docker compose run --rm --no-deps -T logbrook \
+  --config /etc/logbrook/config.toml check-config
+```
+
+This uses the proposed mounts and environment, including changes the running container cannot see. `check-config` validates without opening the data directory. Once it succeeds, apply the configuration with `docker compose up -d --wait`. Shortening retention can delete history on the next maintenance pass; increasing it cannot recover expired data.
 
 Docker references: [volumes](https://docs.docker.com/engine/storage/volumes/), [Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/), and [Compose networking](https://docs.docker.com/compose/how-tos/networking/).

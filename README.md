@@ -249,7 +249,7 @@ cargo build --package logbrook --locked
 cargo test --workspace --all-targets --locked
 ```
 
-Rust integration tests use temporary DuckDB databases and disposable servers. The process tests in `tests/process.rs` verify acknowledged ingestion after SIGKILL, restart, Parquet archival, relocated restore, retention, per-index limits, and management CLI behavior. Workspace tests also check load scheduling, bounded shutdown, and report accounting.
+Rust integration tests use temporary DuckDB databases and disposable servers. The process tests in `tests/process.rs` verify acknowledged ingestion after SIGKILL, restart, Parquet archival, relocated restore, retention, per-index limits, and management CLI behavior. Workspace tests also check load scheduling, bounded shutdown, and report accounting. The release and skill-example tests require Bash, Git, jq, and OpenSSL; they use local Git remotes and temporary configuration files.
 
 The [developer tools](xtask/README.md) provide container verification and repeatable load generators through `cargo xtask`. Their dependencies belong to the separate `logbrook-dev` workspace package under `xtask/` and are not included in the server executable or runtime image.
 
