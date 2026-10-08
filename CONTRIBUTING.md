@@ -65,3 +65,5 @@ For container changes, use the [container verification instructions](docs/CONTAI
 - After dependency changes, regenerate and review the [third-party notices](licenses/README.md). CI checks that the distributed licenses match the lockfile.
 
 Logbrook is licensed under [MIT](LICENSE). Contributions are accepted under the same license.
+
+Maintainers can follow the [release guide](docs/RELEASING.md) to prepare versions and publish verified container images and GitHub releases.

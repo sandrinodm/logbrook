@@ -2062,5 +2062,6 @@ async fn unknown_endpoints_return_json_and_openapi_remains_available() {
 
     assert_eq!(status, StatusCode::OK);
     assert!(document["openapi"].is_string());
+    assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(document["paths"]["/logs"].is_object());
 }

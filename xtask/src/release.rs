@@ -6,6 +6,10 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
+#[cfg(all(test, unix))]
+#[path = "release_workflow_tests.rs"]
+mod workflow_tests;
+
 #[derive(clap::Args)]
 pub struct Args {
     /// current, patch, minor, major, or an explicit version without a leading v.
@@ -94,13 +98,25 @@ fn fingerprint(text: &str) -> String {
     format!("Cargo.lock SHA-256: {:x}", Sha256::digest(text.as_bytes()))
 }
 
+fn replace_once(text: &str, old: &str, new: &str) -> Result<String> {
+    if text.matches(old).count() != 1 {
+        return Err(format!("expected exactly one version marker: {old}").into());
+    }
+
+    Ok(text.replacen(old, new, 1))
+}
+
 fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Value> {
     let manifest_path = root.join("Cargo.toml");
     let lock_path = root.join("Cargo.lock");
     let notices_path = root.join("THIRD_PARTY_NOTICES.txt");
+    let docker_path = root.join("Dockerfile");
+    let api_path = root.join("src/openapi.json");
     let mut manifest_text = fs::read_to_string(&manifest_path)?;
     let mut lock_text = fs::read_to_string(&lock_path)?;
     let notices_text = fs::read_to_string(&notices_path)?;
+    let docker_text = fs::read_to_string(&docker_path)?;
+    let api_text = fs::read_to_string(&api_path)?;
     let manifest: Manifest = toml::from_str(&manifest_text)?;
     let lock: Lockfile = toml::from_str(&lock_text)?;
 
@@ -132,6 +148,23 @@ fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Va
     let target = target_version(&current, requested)?;
     let changed = current != target;
     let replacement = format!("\"{target}\"");
+
+    // These distributed metadata fields describe the application release too.
+    // Validate all markers before writing any of the version files.
+    let api: serde_json::Value = serde_json::from_str(&api_text)?;
+    if api["info"]["version"] != current.to_string() {
+        return Err("OpenAPI version differs from the application version".into());
+    }
+    let api_text = replace_once(
+        &api_text,
+        &format!("\"version\": \"{current}\""),
+        &format!("\"version\": \"{target}\""),
+    )?;
+    let docker_text = replace_once(
+        &docker_text,
+        &format!("\nARG VERSION={current}\n"),
+        &format!("\nARG VERSION={target}\n"),
+    )?;
     manifest_text.replace_range(manifest.package.version.span(), &replacement);
     lock_text.replace_range(locked.version.span(), &replacement);
 
@@ -144,6 +177,8 @@ fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Va
         fs::write(manifest_path, manifest_text)?;
         fs::write(lock_path, lock_text)?;
         fs::write(notices_path, notices_text)?;
+        fs::write(docker_path, docker_text)?;
+        fs::write(api_path, api_text)?;
     }
 
     Ok(serde_json::json!({
@@ -159,11 +194,22 @@ fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Va
 mod tests {
     use super::*;
 
-    fn fixture() -> tempfile::TempDir {
+    pub(super) fn fixture() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         let lock = "version = 4\n\n[[package]]\nname = \"logbrook\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"dependency\"\nversion = \"0.1.0\"\nsource = \"registry+example\"\n";
         fs::write(directory.path().join("Cargo.toml"), "# Keep this comment.\n[package]\nname = \"logbrook\"\nversion = \"0.1.0\" # application\n\n[dependencies]\ndependency = \"0.1.0\"\n").unwrap();
         fs::write(directory.path().join("Cargo.lock"), lock).unwrap();
+        fs::write(
+            directory.path().join("Dockerfile"),
+            "FROM example\nARG VERSION=0.1.0\n",
+        )
+        .unwrap();
+        fs::create_dir(directory.path().join("src")).unwrap();
+        fs::write(
+            directory.path().join("src/openapi.json"),
+            "{\n  \"info\": {\n    \"version\": \"0.1.0\"\n  }\n}\n",
+        )
+        .unwrap();
         fs::write(
             directory.path().join("THIRD_PARTY_NOTICES.txt"),
             format!("{}\n\nOriginal license text\n", fingerprint(lock)),
@@ -181,6 +227,7 @@ mod tests {
             ("minor", "0.2.0"),
             ("major", "1.0.0"),
             ("0.2.0-rc.1", "0.2.0-rc.1"),
+            ("0.2.0--x", "0.2.0--x"),
         ] {
             assert_eq!(
                 target_version(&current, requested).unwrap().to_string(),
@@ -232,6 +279,15 @@ mod tests {
             format!("{}\n\nOriginal license text\n", fingerprint(&updated_lock))
         );
         assert_eq!(prepare(root, "current", false).unwrap()["changed"], false);
+        assert!(
+            fs::read_to_string(root.join("Dockerfile"))
+                .unwrap()
+                .contains("ARG VERSION=0.2.0\n")
+        );
+        let api: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join("src/openapi.json")).unwrap())
+                .unwrap();
+        assert_eq!(api["info"]["version"], "0.2.0");
     }
 
     #[test]
@@ -263,5 +319,25 @@ mod tests {
             fs::read_to_string(root.join("Cargo.toml")).unwrap(),
             changed
         );
+    }
+
+    #[test]
+    fn rejects_stale_distributed_versions_before_writing() {
+        for file in ["Dockerfile", "src/openapi.json"] {
+            let directory = fixture();
+            let root = directory.path();
+            let original = fs::read(root.join("Cargo.toml")).unwrap();
+            let text = fs::read_to_string(root.join(file)).unwrap();
+            fs::write(root.join(file), text.replace("0.1.0", "0.0.9")).unwrap();
+
+            assert!(prepare(root, "patch", false).is_err());
+            assert_eq!(fs::read(root.join("Cargo.toml")).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn repository_release_metadata_matches_manifest() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        assert_eq!(prepare(root, "current", true).unwrap()["changed"], false);
     }
 }

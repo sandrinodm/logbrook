@@ -10,7 +10,7 @@ Images use `ghcr.io/<owner>/<repository>`, with both names lowercased. A release
 2. Allow GitHub Actions to write repository contents and publish packages. Repository rules must permit the release job to push its version commit to `main` and create tags. If a rule blocks the bot, resolve that repository policy before releasing; the workflow does not bypass protection or force-push.
 3. If the GHCR package already exists, connect it to this repository and grant the repository Actions access to it.
 
-The workflows use the built-in `GITHUB_TOKEN`. Only version/tag preparation and GitHub release creation request `contents: write`; only image publication requests `packages: write`. Verification is read-only. No Docker Hub account, personal access token, or registry secret is required. See [GitHub's registry authentication guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-in-a-github-actions-workflow).
+The workflows use the built-in `GITHUB_TOKEN`. Version preparation and verification have read-only repository access. Only committing/tagging and GitHub release creation request `contents: write`; only image publication requests `packages: write`. No Docker Hub account, personal access token, or registry secret is required. See [GitHub's registry authentication guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#authenticating-in-a-github-actions-workflow).
 
 ## Create a release
 
@@ -30,9 +30,13 @@ The workflows use the built-in `GITHUB_TOKEN`. Only version/tag preparation and 
 
 Explicit versions omit the leading `v`. Downgrades, build metadata such as `+build.1`, and existing tags are rejected. To promote a prerelease, specify its intended stable version explicitly. Prereleases cannot be marked latest. Version selection is manual; Conventional Commit messages do not automatically choose an increment.
 
-The preparation job updates the root `Cargo.toml`, its application entry in `Cargo.lock`, and the lockfile fingerprint in `THIRD_PARTY_NOTICES.txt`. A version-only update leaves dependency versions and license texts untouched. Existing notices must already match the lockfile; dependency updates still require [normal notice regeneration](../licenses/README.md). Changed files are committed as `chore(release): v<version>`. For `current`, no empty version commit is created.
+The preparation job updates five version fields: the root `Cargo.toml`, its application entry in `Cargo.lock`, the lockfile fingerprint in `THIRD_PARTY_NOTICES.txt`, the default image version in `Dockerfile`, and `info.version` in `src/openapi.json`. The image label and API document describe the application release. A version-only update leaves dependency versions, API schemas, and license texts untouched. Existing metadata must match the application version, and notices must match the lockfile; dependency updates still require [normal notice regeneration](../licenses/README.md).
+
+Preparation builds the Rust helper with read-only repository access and saves a patch. A separate runner with write access checks that the patch changes exactly those fields, then commits it as `chore(release): v<version>`. It never builds or runs project dependencies. Checkout credentials are not persisted, Git hooks are disabled for commit/tag/push, and authentication is supplied only to the final Git step. For `current`, the patch is empty and no empty version commit is created.
 
 The version commit and annotated tag are pushed together with an atomic, non-forced Git push. If `main` advances while preparing, or the tag already exists, preparation fails instead of overwriting another change. The image workflow checks the tag against both the prepared commit and package version, then runs Rust and Pino checks, full notice verification, and native container builds and smoke tests for both architectures.
+
+Only one release runs at a time. GitHub keeps one pending run in this concurrency group; another dispatch replaces that pending run. Start a release once and follow its existing run instead of repeatedly dispatching it.
 
 Publication starts only after every verification job passes. It transfers the verified OCI archives by digest and combines their manifests without rebuilding. The archive's image configuration is checked against the locally tested image before upload. Skopeo copies all manifests with digest preservation, retaining SBOM and provenance attestations; Docker Buildx assembles the multi-platform image. See [Skopeo's copy options](https://github.com/containers/skopeo/blob/main/docs/skopeo-copy.1.md) and [Docker's image-copying guidance](https://docs.docker.com/build/ci/github-actions/copy-image-registries/).
 
@@ -56,7 +60,9 @@ cargo xtask release-version --dry-run patch
 cargo xtask release-version --dry-run 0.2.0-rc.1
 ```
 
-It emits JSON containing the old version, target version, tag, and whether files would change. Removing `--dry-run` updates the three version-related files locally. This helper does not commit, tag, push, create a GitHub release, or publish an image. The Actions workflow owns those steps.
+It emits JSON containing the old version, target version, tag, and whether files would change. Removing `--dry-run` updates the five version-related files locally. This helper does not commit, tag, push, create a GitHub release, or publish an image. The Actions workflow owns those steps.
+
+`cargo test --package logbrook-dev --lib release --locked` checks the version helper and runs the actual release scripts against disposable local Git remotes. It covers initial releases, increments, unusual valid prereleases, altered patches, concurrent main updates, existing tags, atomic push rejection, and mocked GitHub-release retries. It does not publish anything externally.
 
 ## Retry a failed release
 

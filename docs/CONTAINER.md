@@ -20,6 +20,10 @@ stage tools. Stripping preserves runtime unwind information and does not change
 Rust optimization, panic handling, or DuckDB compilation. Build checks are not a
 substitute for the packaged runtime smoke test below.
 
+The Dockerfile's default version label tracks the application version in
+`Cargo.toml`. The release helper updates both, including for ordinary local and
+Compose builds. CI supplies the same version explicitly as a build argument.
+
 When the application build step runs, it refreshes both Rust crate entry-point
 timestamps before invoking Cargo. A shared target cache can otherwise consider
 newly copied sources older than a prior build's dependency timestamps and reuse

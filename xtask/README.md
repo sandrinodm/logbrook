@@ -24,9 +24,11 @@ Notice generation requires the pinned `cargo-about` tool. See [license maintenan
 
 ## Release versions
 
-`cargo xtask release-version --dry-run patch` previews the next version without changing files. Accepts `current`, `patch`, `minor`, `major`, or an explicit SemVer value such as `0.2.0-rc.1`. Use an explicit stable version to promote a prerelease. Without `--dry-run`, it updates the application manifest, lockfile entry, and notice fingerprint, preserving dependency versions, manifest comments, and license text. Stale notices and downgrades are rejected before writing.
+`cargo xtask release-version --dry-run patch` previews the next version without changing files. It accepts `current`, `patch`, `minor`, `major`, or an explicit SemVer value such as `0.2.0-rc.1`. Use an explicit stable version to promote a prerelease. Without `--dry-run`, it updates the application manifest, lockfile entry, notice fingerprint, Dockerfile version default, and OpenAPI `info.version`, preserving dependency versions, manifest comments, API schemas, and license text. Stale version metadata, stale notices, and downgrades are rejected before writing.
 
 This helper prepares files only. The manual **Release** Actions workflow performs the commit, atomic tag push, verification, image publication, and GitHub release creation. Use `current` for the initial release of the version already in `Cargo.toml`.
+
+`cargo test --package logbrook-dev --lib release --locked` also exercises the workflow's shell scripts against disposable local Git remotes and a mocked GitHub API. These tests verify accepted and rejected patches, prerelease compatibility, stale-branch and tag conflicts, atomic push failure, and release retries without publishing externally. They require Bash, Git, and jq, which are available on the CI runners.
 
 ## Load generators
 
