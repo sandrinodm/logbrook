@@ -40,7 +40,7 @@ Each index lives in its own directory under `<data_dir>/indexes/`.
 | Path | Contents |
 | --- | --- |
 | `events.duckdb` | Recent ("hot") events and the archive manifest. |
-| `events.duckdb.wal` | DuckDB's write-ahead log, present while there are uncommitted checkpoints. |
+| `events.duckdb.wal` | DuckDB's write-ahead log, present while committed changes are not yet checkpointed into `events.duckdb`. |
 | `archives/` | Parquet files for older events. |
 | `temp/` | DuckDB spill files for large queries. |
 | `.index-trash/` | Holds a deleted index's directory until cleanup finishes. It is not a backup. |
@@ -58,7 +58,7 @@ An index comes into existence in one of four ways:
 
 Reads never create an index. A read from an unknown index returns `404`.
 
-The `max_indexes` setting, 4 by default and counting `default`, caps how many indexes can exist. Creating one past the limit is rejected with `429`. The `default` index and indexes declared in the configuration cannot be deleted. Only an admin token can delete an index.
+The `max_indexes` setting, 4 by default and counting `default`, caps how many indexes can exist. Creating one past the limit is rejected with `429`. The `default` index and indexes declared in the configuration, including names listed in `LOGBROOK_INDEXES`, cannot be deleted. Only an admin token can delete an index.
 
 <Aside type="note" title="Index limits share memory">
 `max_indexes` is also the number of slots that `storage.memory_limit`, `storage.temp_limit` and `storage.queue_bytes` divide across. Unused slots still reserve their share. See [indexes and retention](/configure/indexes-and-retention/).

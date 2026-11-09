@@ -33,12 +33,18 @@ npx @cloudflare/nimbus-docs check   # again, to check links in the built site
 ## Deploy
 
 `.github/workflows/pages.yml` builds every push and pull request to `docs-site` and deploys
-pushes to GitHub Pages. Run it by hand from the Actions tab to pick up a new API spec from
-`main`. One-time repository setup:
+pushes to GitHub Pages. Nothing rebuilds the site when the spec on `main` changes. To pick up
+a new spec, push to `docs-site`, or re-run the latest deploy run from the Actions tab: each
+run checks out `main` as it is at that moment. GitHub shows the "Run workflow" button only
+for workflows on the default branch, so it doesn't appear for this one; after the first
+push-triggered run, `gh workflow run pages.yml --ref docs-site` may work instead.
+
+One-time repository setup:
 
 1. Settings → Pages → Build and deployment → Source: **GitHub Actions**.
 2. Settings → Environments → `github-pages` → Deployment branches and tags: allow
    **`docs-site`**. Without this, deploys fail with "Branch docs-site is not allowed to
    deploy to github-pages due to environment protection rules".
 
-`AGENT.md` has the Nimbus conventions for coding agents working on this branch.
+`AGENT.md` has the conventions for coding agents working on this branch: Logbrook-specific
+rules first, then the Nimbus guide.

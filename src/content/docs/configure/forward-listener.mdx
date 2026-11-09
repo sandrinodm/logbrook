@@ -7,7 +7,7 @@ sidebar:
 
 This page is the reference for the `[forward]` section of the Logbrook TOML file. It covers listeners, principals, routes, TLS, limits and the metrics the receiver exports. For a walkthrough, see [Docker and Fluent Forward](/send-logs/docker-forward/).
 
-The Forward receiver is off by default and is configured only in TOML. There are no environment variables for it. HTTP tokens are still required, and Forward clients authenticate as separate principals. Settings apply on restart.
+The Forward receiver is off by default and is configured only in TOML. There are no `LOGBROOK_*` environment variables for it; only its secrets can come from an environment variable that the file names. HTTP tokens are still required, and Forward clients authenticate as separate principals. Settings apply on restart.
 
 Run `logbrook --config <file> check-config` to validate a file. It rejects unknown keys, overlapping routes, unknown principals, undeclared indexes and limits that contradict each other.
 

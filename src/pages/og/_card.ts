@@ -12,10 +12,11 @@
  */
 import { createCardRenderer, type CardNode, type CardTypography } from "@cloudflare/nimbus-docs/og";
 import { root } from "astro:config/server";
+import { config } from "virtual:nimbus/config";
 
 import { logo } from "@/components/logo";
 
-// The starter's light theme (src/styles/globals.css), in hex for Satori.
+// The site's light theme (src/styles/globals.css), in hex for Satori.
 const FOREGROUND = "#171717";
 const MUTED = "#696969";
 const BORDER = "#eaeaea";
@@ -28,6 +29,7 @@ const COLUMN = WIDTH - LEFT - 200;
 
 const TITLE: CardTypography = { fontFamily: "Inter", fontWeight: 500, letterSpacing: "-0.025em", lineHeight: 1.1, color: FOREGROUND };
 const SECTION: CardTypography = { fontFamily: "Inter", fontWeight: 400, lineHeight: 1.2, color: MUTED };
+const WORDMARK = { fontFamily: "Inter", fontWeight: 500, fontSize: 30, letterSpacing: "-0.02em", lineHeight: 1, color: FOREGROUND };
 
 // Fonts sit beside this file, not in public/, so they never ship. Read from
 // the project so `astro build --root <site>` finds them.
@@ -62,7 +64,11 @@ async function card({ section, title, sizes }: { section?: string; title: string
   const heading = await renderer.fit(title, { width: COLUMN, sizes, lines: 3, style: TITLE });
   const label = section ? await renderer.fit(section, { width: COLUMN, sizes: [26], lines: 1, style: SECTION }) : undefined;
   return el("div", { width: WIDTH, height: HEIGHT, display: "flex", position: "relative", background: BACKGROUND }, [
-    el("div", { position: "absolute", left: LEFT, top: 72, display: "flex" }, Logo(32)),
+    // The mark and the site name, so a shared link says what it's about.
+    el("div", { position: "absolute", left: LEFT, top: 72, display: "flex", alignItems: "center", gap: 12 }, [
+      Logo(32),
+      el("div", { display: "flex", ...WORDMARK }, config.title),
+    ]),
     el("div", { position: "absolute", left: LEFT, right: LEFT, top: 148, height: 0, borderTop: `1.5px solid ${BORDER}` }),
     // Hung from the hairline rather than set on the bottom margin: X crops
     // the card to 2:1 and covers its foot with the link's domain.

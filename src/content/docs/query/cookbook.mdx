@@ -19,6 +19,8 @@ export QUERY_INDEX=checkout
 logbrook indexes list
 ```
 
+`QUERY_INDEX`, `QUERY_FROM_MS` and `QUERY_TO_MS` are ordinary shell variables that the recipes and helpers below pass to `logbrook` and `curl`. The `logbrook` binary does not read them itself.
+
 With Docker Compose, run the CLI inside the container, for example `docker compose exec logbrook logbrook query checkout --since 1h`. If you already have an index with data, you can skip the demo and use your own index.
 
 ### Load the demo dataset

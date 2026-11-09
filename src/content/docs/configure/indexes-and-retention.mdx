@@ -15,7 +15,7 @@ This page shows how to cap the number of indexes, how indexes get created, and h
 max_indexes = 8
 ```
 
-Env: `LOGBROOK_MAX_INDEXES`. The range is 1 to 64. At startup, Logbrook counts the `default` index plus every `[indexes.<name>]` table you declared, and refuses to start if that exceeds the limit.
+Env: `LOGBROOK_MAX_INDEXES`. The range is 1 to 64. At startup, Logbrook counts the `default` index, every `[indexes.<name>]` table and `LOGBROOK_INDEXES` name you declared, and the index directories already on disk, and refuses to start if that exceeds the limit.
 
 When the limit is reached, a request that would create another index fails with `429` and the message `maximum index count reached; increase max_indexes and restart`. Raise the limit and restart, or delete an index you no longer need.
 
@@ -48,7 +48,7 @@ An index created by its first write has no `[indexes.<name>]` table, so it gets 
 
 You can restrict where a token may write with [`ingest_index_scopes`](/configure/credentials/). A token scoped to `payments` cannot create `audit` by writing to it.
 
-Indexes declared in configuration and the `default` index cannot be deleted. Other indexes can be deleted by an admin token:
+Indexes declared in configuration, including names listed in `LOGBROOK_INDEXES`, and the `default` index cannot be deleted. Other indexes can be deleted by an admin token:
 
 ```sh
 logbrook indexes delete audit --yes
@@ -136,7 +136,7 @@ Check what an index resolved to:
 logbrook indexes show audit
 ```
 
-The output includes `retention_ms`, `max_size_bytes`, the measured size and whether the index is ready.
+The output shows the measured size, the size target, the retention and whether the index is ready. With `--json` it includes the raw `retention_ms` and `max_size_bytes`.
 
 ## Change retention
 

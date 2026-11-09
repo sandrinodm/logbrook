@@ -14,9 +14,9 @@ const nimbusConfig = defineNimbusConfig({
     "Self-hosted log search for structured application logs: one Rust binary, DuckDB for recent events, Parquet for archives.",
   locale: "en",
   github: "https://github.com/sandrinodm/logbrook",
-  // Pages live on the docs-site branch of the main repository.
-  editPattern:
-    "https://github.com/sandrinodm/logbrook/edit/docs-site/src/content/docs/{path}",
+  // Pages live on the docs-site branch of the main repository. Nimbus
+  // replaces `{path}` with the file's repo path (`src/content/docs/….mdx`).
+  editPattern: "https://github.com/sandrinodm/logbrook/edit/docs-site/{path}",
   socialImageAlt: "Logbrook documentation",
   // Origin-root discovery files (/.well-known/*) can't be served from a
   // project page under /logbrook, so leave them out.

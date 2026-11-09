@@ -25,7 +25,7 @@ Logbrook marks the server unready and shuts it down on integrity failures and br
 
 ### Container healthcheck
 
-The image runs `logbrook healthcheck` every 30 seconds. It sends `GET /ready` over loopback, needs no credentials, does not open storage, and exits nonzero unless it gets an HTTP 200 within 3 seconds. It reads the bind address from `--config` if given, then `LOGBROOK_BIND`.
+The image runs `logbrook healthcheck` every 30 seconds. It sends `GET /ready` to the bind address (loopback when the bind address is `0.0.0.0` or `::`), needs no credentials, does not open storage, and exits nonzero unless it gets an HTTP 200 within 3 seconds. It reads the bind address from `--config` if given, then `LOGBROOK_BIND`.
 
 ```sh
 docker exec logbrook logbrook healthcheck
@@ -47,7 +47,7 @@ scrape_configs:
       - targets: ["logbrook:3100"]
 ```
 
-Only one metrics diagnostics job runs at a time. A scrape that arrives while another is running gets `429`, so avoid several Prometheus servers scraping the same instance at short intervals.
+Only one diagnostics job runs at a time, and index listings that measure disk use share it. A scrape that arrives while another scrape or such a listing is running gets `429`, so avoid several Prometheus servers scraping the same instance at short intervals.
 
 To check by hand:
 
@@ -92,7 +92,7 @@ Every storage metric carries an `index` label. Sizes are in bytes.
 | `logbrook_storage_reader_queue_used` | gauge | Occupied reader queue slots |
 | `logbrook_storage_readers_busy` | gauge | Busy reader workers |
 | `logbrook_storage_query_timeouts_total` | counter | Queries that hit the deadline |
-| `logbrook_storage_maintenance_failures_total` | counter | Failed maintenance passes |
+| `logbrook_storage_maintenance_failures_total` | counter | Failed maintenance jobs |
 | `logbrook_storage_commit_seconds_sum` | counter | Total time spent committing |
 | `logbrook_storage_commits_total` | counter | Commits |
 | `logbrook_storage_group_requests_total` | counter | Requests in committed groups |
@@ -139,7 +139,7 @@ These metrics are always present, and stay at zero when the [Forward listener](/
 | `logbrook_forward_ack_failed_total` | counter | Acknowledgements that failed to send |
 | `logbrook_forward_protocol_rejected_total` | counter | Protocol errors |
 | `logbrook_forward_authentication_rejected_total` | counter | Authentication failures |
-| `logbrook_forward_route_rejected_total` | counter | Events with no matching route |
+| `logbrook_forward_route_rejected_total` | counter | Envelopes rejected for an unmatched or forbidden route |
 | `logbrook_forward_overload_total` | counter | Capacity rejections |
 | `logbrook_forward_storage_rejected_total` | counter | Storage rejections |
 | `logbrook_forward_raw_bytes` | gauge | Raw bytes held |
@@ -148,7 +148,7 @@ These metrics are always present, and stay at zero when the [Forward listener](/
 | `logbrook_forward_heartbeats_total` | counter | Heartbeats |
 | `logbrook_forward_heartbeat_send_failed_total` | counter | Heartbeat sends that failed |
 | `logbrook_forward_session_errors_total` | counter | Failed session attempts |
-| `logbrook_forward_normalization_fallback_total` | counter | Frames normalized through the generic fallback after a Docker parse failed |
+| `logbrook_forward_normalization_fallback_total` | counter | Docker records stored through the generic fallback |
 | `logbrook_forward_binary_preserved_total` | counter | Events whose binary record encoding was preserved as typed values |
 | `logbrook_forward_docker_fragments_total` | counter | Docker records with partial-message fields, stored as separate events |
 | `logbrook_forward_duration_seconds` | histogram | Time per stage, label `stage`: `decode`, `admission`, `commit`, `ack`, `preparation` |

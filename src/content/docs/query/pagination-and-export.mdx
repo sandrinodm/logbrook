@@ -9,7 +9,7 @@ A search returns one page of events. To read more, follow the cursor. To work wi
 
 ## Page size
 
-Page size is 1 to 1,000 events, default 100. The server's configured maximum can be lower. The 1,000 default is the built-in cap.
+Page size is 1 to 1,000 events, default 100. An operator can set a lower server maximum with `max_page_size`, but not a higher one.
 
 ## Follow the cursor
 
@@ -65,12 +65,12 @@ A paginated search only returns events that were ingested before its first page,
 This loop writes every page to `export.ndjson`, replacing any existing file. It stops after the last page and exits nonzero if a request fails. Delete a partial file before you retry.
 
 ```sh
-export LOGBROOK_INDEX=checkout
+export EXPORT_INDEX=checkout
 export TO=$(jq -nr 'now * 1000 | floor')
 export FROM=$((TO - 3600000))
 
 logbrook_page() {
-  logbrook query "$LOGBROOK_INDEX" --from "$FROM" --to "$TO" --limit 500 --json "$@"
+  logbrook query "$EXPORT_INDEX" --from "$FROM" --to "$TO" --limit 500 --json "$@"
 }
 
 (
@@ -91,7 +91,7 @@ logbrook_page() {
 wc -l < export.ndjson
 ```
 
-Add any filter options to `logbrook_page`. Fix the bounds once, outside the loop. Events that retention removes before their page is read are not exported.
+`EXPORT_INDEX`, `FROM` and `TO` are plain shell variables passed on the command line; the binary does not read them. Add any filter options to `logbrook_page`. Fix the bounds once, outside the loop. Events that retention removes before their page is read are not exported.
 
 <Aside type="caution" title="Memory and response size">
 The CLI refuses a response larger than 16 MiB, and the server limits a response to 8 MiB by default. If a page is too large, lower `--limit` or narrow the filters.

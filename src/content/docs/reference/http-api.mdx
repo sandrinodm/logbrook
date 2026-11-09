@@ -47,12 +47,16 @@ A read token has a list of allowed sources, where an empty list allows all. Inge
 ## Ingest
 
 ```sh
+now=$(jq -nr 'now * 1000 | floor')
+
 curl --fail-with-body --silent --show-error \
   "$LOGBROOK_URL/indexes/checkout/logs/ingest" \
   -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '[{"time":1791453599000,"level":50,"msg":"payment timeout","service":"checkout"}]'
+  --data "[{\"time\":$now,\"level\":50,\"msg\":\"payment timeout\",\"service\":\"checkout\"}]"
 ```
+
+The event time must fall inside the retention window (seven days by default), so the example uses the current time.
 
 ```json
 {"accepted":1}

@@ -10,7 +10,7 @@ This page covers the commands that work on a data directory while the server is 
 Offline commands read the same configuration as the server (`--config` and the supported `LOGBROOK_*` environment variables) and open storage directly. Stop the server first, because only one process may use a data root at a time. They take `--index <name>`, which defaults to `default`.
 
 <Aside type="note" title="Containers">
-The image has no shell, but offline commands are ordinary subcommands. Run them in a one-off container on the data volume with the server stopped, for example `docker run --rm -v logbrook_logs:/data ghcr.io/sandrinodm/logbrook:0.1.0 archive --before 1791321600000`. The image already sets `LOGBROOK_DATA_DIR=/data`.
+The image has no shell, but offline commands are ordinary subcommands. Run them in a one-off container on the data volume with the server stopped, for example `docker run --rm -v logbrook_logs:/data -e LOGBROOK_INGEST_TOKEN -e LOGBROOK_READ_TOKEN ghcr.io/sandrinodm/logbrook:0.1.0 archive --before 1791321600000`. Configuration loading still requires an ingestion and a read token, so pass the server's tokens and any other `LOGBROOK_*` settings it uses, such as `LOGBROOK_MAX_INDEXES`. The image already sets `LOGBROOK_DATA_DIR=/data`.
 </Aside>
 
 ## Archive events offline

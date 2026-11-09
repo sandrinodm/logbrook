@@ -64,6 +64,8 @@ Start the server again and count the events:
 logbrook count payments --since 30d --source checkout
 ```
 
+For history older than that, pass `--from` and `--to` instead. One query spans at most 31 days by default, so count longer history in adjacent windows.
+
 </Step>
 </Steps>
 
@@ -72,12 +74,12 @@ logbrook count payments --since 30d --source checkout
 | Option | Meaning |
 | --- | --- |
 | `<file>` | Path of the JSON or NDJSON file. |
-| `--source <name>` | Required. The `source` stored on every imported event. It replaces the ingestion token's source. |
+| `--source <name>` | Required. The `source` stored on every imported event. Import uses no token, so this takes the place of the source an ingestion token would stamp. 1 to 128 ASCII letters, digits, `-`, `_` or `.`. |
 | `--ndjson` | Read the file as NDJSON instead of one JSON array. |
 | `--index <name>` | Global option. Destination index, `default` if omitted. The index is created if it doesn't exist. |
 | `--config <file>` | Global option. The server's TOML file. |
 
-The index count still counts against `max_indexes`, and the command fails if the import would exceed it.
+A new index still counts against `max_indexes`, and the command fails if creating it would exceed the limit.
 
 ## Failures and retries
 

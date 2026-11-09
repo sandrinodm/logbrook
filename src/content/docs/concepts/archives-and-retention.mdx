@@ -9,15 +9,16 @@ Logbrook keeps recent events in a database and moves older events to compact fil
 
 ## The lifecycle of an event
 
-Every index runs a background maintenance pass at startup and then every `maintenance_interval_secs` (60 seconds by default). Each pass does three jobs.
+Every index runs a background maintenance pass at startup and then every `maintenance_interval_secs` (60 seconds by default). Each pass runs these jobs in order.
 
 | Job | What it does |
 | --- | --- |
-| Archive | Moves hot events older than `archive_after_ms` from DuckDB into Parquet files. Archiving does not delete anything. |
 | Retain | Expires events older than the retention window. |
+| Enforce size | When the index has a [disk-size target](#disk-size-targets) and is over it, expires the oldest events. It runs again at the end of the pass. |
+| Archive | Moves hot events older than `archive_after_ms` from DuckDB into Parquet files. Archiving does not delete anything. |
 | Compact | Merges small Parquet files in the same time partition into larger ones. |
 
-All three use **event time**. An event stays in DuckDB for about a day by default, then lives in an archive until retention expires it.
+Retention, archiving and compaction all work on **event time**. An event stays in DuckDB for about a day by default, then lives in an archive until retention expires it.
 
 ### Archives
 

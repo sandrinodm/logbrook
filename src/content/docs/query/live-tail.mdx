@@ -37,7 +37,7 @@ data: caught up
 | `gap` | The stream ended because events cannot be replayed. See below. |
 | `error` | The stream ended because the tail query failed. |
 
-Keepalive comments can appear between frames. Real IDs start with the index name.
+Keepalive comments can appear between frames. On the `/indexes/{index}/logs/tail` route, IDs start with the index name. IDs from the unprefixed `/logs/tail` route have no index prefix.
 
 ## Filter the stream
 
@@ -63,7 +63,7 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
 The server replays matching events still retained after that point, then follows new ones. Rules:
 
 - Use the same index, route style and filters. A resume ID with different filters returns `400` before the stream starts.
-- Send the ID unchanged, with its index prefix.
+- Send the ID unchanged, including any index prefix.
 - It is not a search `next_cursor` and not the event's own JSON `id`.
 
 The server does not reconnect for you, and neither does `curl`. Store IDs and reconnect in your client.

@@ -226,7 +226,7 @@ Collectors send the same protocol. Create a listener, a principal and a route as
     Match                 application.*
     Host                  logbrook.internal
     Port                  24224
-    Require_ack_response  True
+    Require_ack_response  On
 ```
 
 ```text title="Fluentd"
@@ -241,7 +241,7 @@ Collectors send the same protocol. Create a listener, a principal and a route as
 </match>
 ```
 
-These snippets come from the collectors' own option names, not from the Logbrook repository, so check them against your collector version. Notes that apply to Logbrook:
+These snippets use the same output options as the repository's collector interoperability harness (`tests/tools/forward_interop.py`), which also turns on gzip compression. Collector options change between releases, so check them against your collector version. Notes that apply to Logbrook:
 
 - Use a `generic` route (the default `normalizer`) for collector output. A generic route doesn't detect Docker records from a `log` field.
 - Fluentd 1.20.1 defaults to `heartbeat_type transport`. For ACK-based TCP or TLS delivery, `heartbeat_type none` skips the separate probes and relies on the ACK timeout. If the sender uses UDP heartbeats, set `udp_heartbeat = true` on the listener. A non-loopback listener then also needs `allow_peers`.

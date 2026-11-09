@@ -81,14 +81,23 @@ docker run --rm -v logbrook_restore:/data alpine chown -R 10001:10001 /data
 ```
 </Step>
 <Step title="Start one process on it">
-Point a single Logbrook process at the restored data.
-</Step>
-<Step title="Verify before switching producers">
-Check event counts and a few complete events, for example with the CLI:
+Point a single Logbrook process at the restored data, with the same credentials and settings as the original server. For example, with the tokens exported in your shell:
 
 ```sh
-docker compose exec logbrook logbrook indexes list
-docker compose exec logbrook logbrook query default --since 1h --limit 5
+docker run -d --name logbrook-restore \
+  -v logbrook_restore:/data \
+  -e LOGBROOK_INGEST_TOKEN \
+  -e LOGBROOK_READ_TOKEN \
+  ghcr.io/sandrinodm/logbrook:0.1.0
+```
+</Step>
+<Step title="Verify before switching producers">
+Check event counts and a few complete events, for example with the CLI. Pick a window that covers the backed-up data, up to 31 days:
+
+```sh
+docker exec logbrook-restore logbrook indexes list
+docker exec logbrook-restore logbrook count default --since 7d
+docker exec logbrook-restore logbrook query default --since 7d --limit 5
 ```
 </Step>
 </Steps>
@@ -97,7 +106,7 @@ docker compose exec logbrook logbrook query default --since 1h --limit 5
 
 At startup Logbrook checks schema versions and runs migrations inside a transaction.
 
-- The hot-table schema is versioned. The SQL for the older steps lives in the repository's `migrations/` directory (`001_initial.sql`, `002_archive_metadata.sql`); the newest step, version 4, is applied when you turn on [promoted string attributes](/operate/archives-and-migration/#promoted-string-attributes).
+- The hot-table schema is versioned, up to version 4 in this release. Version 4 is applied only when you turn on [promoted string attributes](/operate/archives-and-migration/#promoted-string-attributes).
 - An index without promoted string attributes stays on schema version 3. Turning them on upgrades that index to version 4.
 - Older archive metadata is migrated before the server starts serving.
 - Startup rejects a database whose schema is newer than the binary supports. A binary that only knows version 3 refuses a version 4 index.

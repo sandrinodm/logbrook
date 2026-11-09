@@ -22,7 +22,7 @@ You send events as JSON objects. Logbrook reads a fixed set of canonical fields 
 | `pid` | `pid` | No | Process ID, a nonnegative integer. |
 | `attributes` | every other key | No | The rest of the object, kept as JSON. |
 
-Logbrook adds two fields when it stores the event.
+Logbrook adds three fields when it stores the event.
 
 | Field | Meaning |
 | --- | --- |
@@ -47,7 +47,7 @@ Logbrook uses **event time** for:
 
 Logbrook uses **received time**, in the form of ingestion order, for [live tail](/concepts/search-and-tail/). A delayed event appears in tail when it arrives, not where its timestamp would put it.
 
-This split is deliberate. Event time is what you want when you ask what happened between 14:00 and 14:05. Ingestion order is what you want when you watch a stream and need every new event exactly once.
+This split is deliberate. Event time is what you want when you ask what happened between 14:00 and 14:05. Ingestion order is what you want when you watch a stream and need new events in the order they arrived.
 
 ### Limits on event time
 
@@ -81,7 +81,7 @@ Plan for this in your producer:
 
 The same rule applies to [Fluent Forward](/configure/forward-listener/): the server acknowledges after the commit, and a sender that retries after a lost acknowledgment can store duplicates.
 
-Each request commits in its own transaction and Logbrook does not combine requests, so send events in batches rather than one request per event.
+The writer can commit several queued requests in one transaction, but each request is validated on its own and gets its own response. Send events in batches rather than one request per event.
 
 ## Next steps
 

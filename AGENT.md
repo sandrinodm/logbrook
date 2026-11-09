@@ -2,6 +2,18 @@
 
 > `CLAUDE.md` delegates here. Keep project instructions canonical in this file.
 
+## Logbrook specifics (read first)
+
+This is the documentation site for [Logbrook](https://github.com/sandrinodm/logbrook), kept on the orphan branch `docs-site` and published to <https://sandrinodm.github.io/logbrook/> by `.github/workflows/pages.yml`. Where this section and the Nimbus guide below disagree, this section wins.
+
+- **The source of truth is the Rust code on `main`**, not these pages and not `main`'s `docs/*.md` or `README.md`. Before you write or change a claim about a flag, config key, default, limit, environment variable, endpoint, status code or error message, find it on `main` (`git show main:src/config.rs`, `git grep -n <name> main -- src tests`) and describe what the code does. If you can't confirm it, leave it out or ask.
+- **Don't edit `src/api/openapi.json` here.** The workflow overwrites it with `src/openapi.json` from `main` before every build; that is also the spec the server serves at `/openapi.json`. Change the spec on `main`. The "Replace the spec" advice under [API reference](#api-reference) doesn't apply to this site.
+- **Links:** write internal links from the site root, without the base path and with a trailing slash: `[quickstart](/get-started/quickstart/)`, not `/logbrook/get-started/quickstart/` or a relative `../` path. Nimbus adds `/logbrook`. Link the API reference as `/api/` rather than an operation's generated URL, which changes when the spec gains tags or operation IDs. Link source files at `https://github.com/sandrinodm/logbrook/blob/main/<path>`.
+- **Images** live in `src/assets/` and are referenced relatively from the page (`../../assets/logbrook-banner.webp`); `public/` is for files served as-is.
+- **Base path:** the site is a GitHub Pages project page, so every URL is under `/logbrook/`, and origin-root files (`/robots.txt`, `/.well-known/*`) aren't served from this site. That's why `agents.discovery` is `false`. Ignore the `wrangler.jsonc` and Cloudflare notes below.
+- **Before you hand off:** `npx @cloudflare/nimbus-docs check`, `npm run build`, then `check` again (link checking needs the build). Preview the build with `npm run preview` at <http://localhost:4321/logbrook/>.
+- Commit to `docs-site`, never to `main`; the branches share no history.
+
 Astro-based docs. The `nimbus-docs` package handles content schemas, sidebar/TOC, MDX→markdown, build hooks, and the `nimbus-docs` CLI. Install dependencies first, then run it as `npx @cloudflare/nimbus-docs <command>`: npx uses the project's installed version. Before an install, npx fetches the latest release instead, which may differ from the site's version and give different results. The scoped name keeps npx from fetching the unrelated `nimbus-docs` package. Everything in `src/` is yours to edit.
 
 ## File layout

@@ -44,7 +44,7 @@ See [Credentials and roles](/configure/credentials/).
 
 Logbrook serves plain HTTP and binds to `127.0.0.1:3100` by default. Use a TLS-terminating reverse proxy for remote access, and do not publish the port directly. Responses carry security headers (`x-content-type-options: nosniff`, `x-frame-options: DENY` and a restrictive `content-security-policy`).
 
-The Fluent Forward listener is off until a configuration enables it. A `trusted_network = true` listener accepts any peer that can reach it, so use authenticated listeners across trust boundaries. See [Forward listener](/configure/forward-listener/).
+The Fluent Forward listener is off until a configuration enables it. A `trusted_local` listener with `trusted_network = true` has no authentication and accepts any peer that can reach it, unless `allow_peers` limits the peer addresses. Use authenticated listeners across trust boundaries. See [Forward listener](/configure/forward-listener/).
 
 ### Container
 

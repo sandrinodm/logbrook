@@ -106,10 +106,10 @@ Review any command that changes a server before the agent runs it, as you would 
 This documentation site is also built for agents to read, so an agent can fetch the exact page it needs without scraping HTML:
 
 - Every page has a Markdown version. Add `index.md` to the page path, for example `/logbrook/send-logs/http/index.md`.
-- `/llms.txt` lists every page with its description. Each section also has its own `llms.txt`.
-- `/llms-full.txt` contains the full text of the documentation in one file.
+- `/logbrook/llms.txt` lists every page with its description. Each section also has its own `llms.txt`, such as `/logbrook/query/llms.txt`.
+- `/logbrook/llms-full.txt` contains the full text of the documentation in one file.
 
-Point your agent at `/llms.txt` when it needs to find a page, and at a page's `index.md` when it needs the content.
+Point your agent at `/logbrook/llms.txt` when it needs to find a page, and at a page's `index.md` when it needs the content.
 
 ## Next steps
 
