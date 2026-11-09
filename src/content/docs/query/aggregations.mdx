@@ -1,8 +1,121 @@
 ---
 title: "Counts, facets and histograms"
-description: "Count matching events, group them by field, and chart volume over time."
+description: "Count matching events, list the most frequent services and hosts, and bucket events over time."
 sidebar:
   order: 3
 ---
 
-This page is being written.
+Counts, facets and histograms summarize a whole time window without reading events page by page. They accept the same filters as [search](/query/search/), including [attribute filters](/query/attribute-filters/), and cover every matching event regardless of page size.
+
+Each request reads the data at its own point in time. Two requests with identical bounds can disagree while ingestion or retention is running.
+
+The examples assume `$FROM`, `$TO`, `$LOGBROOK_URL` and `$LOGBROOK_READ_TOKEN` from the [search page](/query/search/), and an index named `checkout`.
+
+## Count
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+```sh
+logbrook count checkout --since 1h
+logbrook count checkout --since 1h --service api --min-level 50
+logbrook count checkout --since 1h --min-level 50 --json
+```
+
+The default output is a bare number. `--json` prints `{"count":5}`.
+
+</TabItem>
+<TabItem label="HTTP">
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/count" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'min_level=50'
+```
+
+```json
+{"count":5}
+```
+
+</TabItem>
+</Tabs>
+
+A window with no matches returns `{"count":0}`.
+
+## Facets
+
+Facets list the most frequent values of the built-in fields. They are available over HTTP only. The CLI has no `facets` command.
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/facets" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'min_level=50' | jq '.services'
+```
+
+The response has five arrays: `services`, `loggers`, `hosts`, `levels` and `sources`. Each holds `value` and `count` pairs:
+
+```json
+[
+  {"value":"api","count":9},
+  {"value":"worker","count":2},
+  {"value":"auth","count":1}
+]
+```
+
+How facets behave:
+
+- Each array holds at most 100 values, sorted by descending count. It is not a full group-by.
+- Level values are strings, such as `"50"`.
+- Events without an optional field are left out of that field's array, so an array does not always add up to the total.
+- Filters apply before grouping, including a filter on the field being grouped. With `service=api`, the `services` array shows only `api`.
+- You cannot group by a custom attribute.
+
+## Histograms
+
+A histogram counts events in fixed-width time buckets. It is available over HTTP only.
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/histogram" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'interval_ms=300000' \
+  --data-urlencode 'min_level=50'
+```
+
+```json
+{"buckets":[{"time":1791370000000,"count":3}]}
+```
+
+- `time` is the bucket start in Unix milliseconds, counted from the exact `from` you sent.
+- Buckets come in ascending order.
+- Empty buckets are left out. Fill them with zeros when charting.
+- The last bucket can be shorter than the interval.
+- An empty histogram is `{"buckets":[]}`.
+
+### Bucket size and limit
+
+`interval_ms` is a positive bucket width in milliseconds. A request can cover at most 2,000 buckets, counting a partial last bucket: `ceil((to - from) / interval_ms) <= 2000`. A request over the limit returns `400`.
+
+| Window | Interval | Buckets |
+| --- | --- | --- |
+| 1 hour | `60000` (1 minute) | 60 |
+| 1 day | `60000` | 1,440 |
+| 7 days | `60000` | 10,080, rejected |
+| 7 days | `900000` (15 minutes) | 672 |
+
+Without `interval_ms`, the server uses 60,000 ms, or the smallest interval that fits 2,000 buckets if that is larger.
+
+Only search accepts `limit` and `cursor`, and only histogram accepts `interval_ms`. Sending them to another endpoint returns `400`.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Live tail" href="/query/live-tail/" description="Follow new events as they arrive." />
+  <LinkCard title="Cookbook" href="/query/cookbook/" description="Facets and histograms in an investigation." />
+  <LinkCard title="HTTP API guide" href="/reference/http-api/" description="Routes, errors and limits." />
+</CardGrid>

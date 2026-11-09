@@ -5,4 +5,106 @@ sidebar:
   order: 2
 ---
 
-This page is being written.
+Three names organize your logs: the index they are stored in, the service that produced them, and the source that delivered them. This page explains what each one is, where it comes from, and how credentials use it.
+
+## Indexes
+
+An index is a named, isolated collection of events. Each index has its own DuckDB database, its own Parquet archives, and its own retention and disk-size settings. Searches never cross indexes, and event IDs are unique only within one index.
+
+Use separate indexes when data needs a different lifetime or access boundary. For example, keep application logs for 7 days and audit logs for 90.
+
+### Names and the default index
+
+An index name has 1 to 63 lowercase ASCII letters, digits, hyphens or underscores, and starts with a letter or digit. The name becomes a directory name and a metric label, which is why the rules are strict.
+
+The `default` index always exists. The unprefixed `/logs` routes address it, and the named routes live under `/indexes/{index}/logs`.
+
+### How an index maps to disk
+
+Each index lives in its own directory under `<data_dir>/indexes/`.
+
+<FileTree>
+- data/
+  - indexes/
+    - default/
+      - events.duckdb
+      - events.duckdb.wal
+      - archives/
+        - ...
+      - temp/
+    - payments/
+      - ...
+  - .index-trash/
+</FileTree>
+
+| Path | Contents |
+| --- | --- |
+| `events.duckdb` | Recent ("hot") events and the archive manifest. |
+| `events.duckdb.wal` | DuckDB's write-ahead log, present while there are uncommitted checkpoints. |
+| `archives/` | Parquet files for older events. |
+| `temp/` | DuckDB spill files for large queries. |
+| `.index-trash/` | Holds a deleted index's directory until cleanup finishes. It is not a backup. |
+
+Logbrook finds existing index directories when it starts. Index directories and files cannot be symlinks, and only one Logbrook process may use a data directory.
+
+### How indexes get created
+
+An index comes into existence in one of four ways:
+
+- The first authorized ingestion request to a new name creates it.
+- `PUT /indexes/{index}` or `logbrook indexes create` creates it explicitly. This call is idempotent.
+- An `[indexes.<name>]` table in the configuration creates it at startup.
+- `LOGBROOK_INDEXES` lists names to create at startup.
+
+Reads never create an index. A read from an unknown index returns `404`.
+
+The `max_indexes` setting, 4 by default and counting `default`, caps how many indexes can exist. Creating one past the limit is rejected with `429`. The `default` index and indexes declared in the configuration cannot be deleted. Only an admin token can delete an index.
+
+<Aside type="note" title="Index limits share memory">
+`max_indexes` is also the number of slots that `storage.memory_limit`, `storage.temp_limit` and `storage.queue_bytes` divide across. Unused slots still reserve their share. See [indexes and retention](/configure/indexes-and-retention/).
+</Aside>
+
+## Services
+
+A service is the application or component that produced an event, such as `api` or `billing-worker`. It comes from the event's own `service` field, and it is optional.
+
+Because the producer sets it, a service name is a label, not a security boundary. You can filter and facet on it, but you cannot scope a credential to a service. Use sources or indexes for access control.
+
+## Sources
+
+A source is a name that the server configuration assigns to an ingestion token. When a producer sends a request with that token, Logbrook stamps every event with the token's source. The payload cannot override it.
+
+```toml title="logbrook.toml"
+[ingest_tokens]
+"replace-with-token-for-checkout" = "checkout-prod"
+"replace-with-token-for-batch" = "batch-prod"
+```
+
+A source names a delivery path: a deployment, a team, or a collector. One source can carry logs from several services, and one service can appear under several sources.
+
+Source names have 1 to 128 ASCII letters, digits, hyphens, underscores or periods.
+
+### Scoping read tokens
+
+Read tokens are limited by source and, optionally, by index:
+
+- In `[read_tokens]`, each token maps to a list of sources it may read. An empty list grants every source.
+- In `[read_index_scopes]`, a token can map to a list of indexes. A missing entry or an empty list grants every index.
+
+A request must satisfy both limits. A token scoped to the source `checkout-prod` and the index `payments` sees only `checkout-prod` events in `payments`. Requests to other indexes return `403`.
+
+If a request names a source that the token does not allow, Logbrook returns `403`. If it names none, the token's own sources apply. The same scoping applies to live tail, facets and histograms.
+
+Ingestion tokens can also be limited to indexes with `[ingest_index_scopes]`. Their source is always fixed by the token.
+
+A source-scoped reader gets reduced detail from some endpoints. For example, `GET /indexes/{index}` returns only the index name to a source-scoped token.
+
+See [credentials and roles](/configure/credentials/) for the full configuration.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Credentials and roles" href="/configure/credentials/" description="Configure ingestion, read and admin tokens." />
+  <LinkCard title="Indexes and retention" href="/configure/indexes-and-retention/" description="Set limits and per-index policy." />
+  <LinkCard title="Search and live tail" href="/concepts/search-and-tail/" description="How reads work across hot and archived events." />
+</CardGrid>

@@ -5,4 +5,144 @@ sidebar:
   order: 3
 ---
 
-This page is being written.
+You will set up a Compose deployment that keeps its data in a named volume, takes its credentials from a `.env` file, and runs with a hardened container. Use it when the [quickstart](/get-started/quickstart/) container is no longer enough.
+
+## What you get
+
+- The published image, with data in the `logs` named volume mounted at `/data`.
+- HTTP published on the host's `127.0.0.1:3100` only.
+- A read-only root filesystem, a 256 MiB `/tmp` tmpfs, all Linux capabilities dropped, and a 35-second shutdown grace period.
+- Seven-day retention, a 20 GB size target per index, at most four indexes, and events archived to Parquet after one day.
+
+## Set it up
+
+<Steps>
+  <Step title="Create a deployment directory">
+    ```sh
+    mkdir logbrook && cd logbrook
+    ```
+  </Step>
+  <Step title="Write compose.yaml">
+    This is the template from the [Logbrook agent skill](https://github.com/sandrinodm/logbrook/blob/main/skills/logbrook/assets/compose.yaml). It takes the image and credentials from `.env`.
+
+    ```yaml title="compose.yaml"
+    services:
+      logbrook:
+        image: ${LOGBROOK_IMAGE:?Set LOGBROOK_IMAGE to a published or locally built image}
+        ports:
+          - "127.0.0.1:3100:3100"
+        environment:
+          LOGBROOK_BIND: 0.0.0.0:3100
+          LOGBROOK_DATA_DIR: /data
+          LOGBROOK_INGEST_TOKEN: ${LOGBROOK_INGEST_TOKEN:?Set a random ingestion token}
+          LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set a different random read token}
+          # LOGBROOK_ADMIN_TOKEN: ${LOGBROOK_ADMIN_TOKEN:?Set a random admin token}
+          LOGBROOK_SOURCE: ${LOGBROOK_SOURCE:-apps}
+          LOGBROOK_RETENTION_DAYS: ${LOGBROOK_RETENTION_DAYS:-7}
+          LOGBROOK_MAX_SIZE_GB: ${LOGBROOK_MAX_SIZE_GB:-20}
+          LOGBROOK_MAX_INDEXES: ${LOGBROOK_MAX_INDEXES:-4}
+          LOGBROOK_INDEXES: ${LOGBROOK_INDEXES:-apps}
+          LOGBROOK_ARCHIVE_AFTER_MS: ${LOGBROOK_ARCHIVE_AFTER_MS:-86400000}
+          LOGBROOK_MAINTENANCE_INTERVAL_SECS: ${LOGBROOK_MAINTENANCE_INTERVAL_SECS:-60}
+        volumes:
+          - logs:/data
+        read_only: true
+        tmpfs:
+          - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+        cap_drop:
+          - ALL
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+        stop_grace_period: 35s
+
+    volumes:
+      logs:
+    ```
+  </Step>
+  <Step title="Create .env">
+    This generates both credentials and refuses to overwrite an existing file. Keep `.env` out of version control.
+
+    ```sh
+    (
+      set -eu
+      umask 077
+      set -C
+      cat > .env <<ENV
+    LOGBROOK_IMAGE=ghcr.io/sandrinodm/logbrook:0.1.0
+    LOGBROOK_INGEST_TOKEN=$(openssl rand -hex 32)
+    LOGBROOK_READ_TOKEN=$(openssl rand -hex 32)
+    ENV
+    )
+    ```
+
+    Compose reads `.env` from the project directory for variable substitution. The ingestion token can only write and the read token can only query, so do not swap them.
+  </Step>
+  <Step title="Start it">
+    ```sh
+    export COMPOSE_PROJECT_NAME=logbrook
+    docker compose config --quiet
+    docker compose up -d --wait --wait-timeout 120
+    ```
+
+    `config --quiet` validates the file without printing the expanded credentials. `--wait` returns once the image's built-in health check passes.
+  </Step>
+  <Step title="Send and search an event">
+    Load the credentials into your shell, then use the `apps` index that the template precreates.
+
+    ```sh
+    set -a; . ./.env; set +a
+
+    curl --fail http://127.0.0.1:3100/indexes/apps/logs/ingest \
+      -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
+      -H 'Content-Type: application/json' \
+      --data "[{\"time\":$(( $(date +%s) * 1000 )),\"level\":30,\"service\":\"web\",\"msg\":\"hello from compose\"}]"
+
+    docker compose exec -T logbrook logbrook query apps --since 1h
+    ```
+  </Step>
+  <Step title="Check that data persists">
+    ```sh
+    docker compose restart logbrook
+    docker compose exec -T logbrook logbrook query apps --since 1h
+    ```
+
+    The event is still there. `docker compose down` keeps the volume. `docker compose down --volumes` deletes it and all your logs.
+  </Step>
+</Steps>
+
+## Change the configuration
+
+After you edit `.env`, recreate the container with `docker compose up -d --wait`. A plain restart does not reload the environment. Shell variables override `.env`, so unset stale ones first.
+
+Common variables, all with defaults in the template:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LOGBROOK_SOURCE` | `apps` | Source assigned to events written with the ingestion token. |
+| `LOGBROOK_INDEXES` | `apps` | Comma-separated indexes to precreate. `default` always exists. |
+| `LOGBROOK_RETENTION_DAYS` | `7` | Retention per index. Must exceed the archive age. |
+| `LOGBROOK_MAX_SIZE_GB` | `20` | Disk-size target per index, in decimal GB. Not a hard quota. |
+| `LOGBROOK_MAX_INDEXES` | `4` | Index slots, including `default`. |
+| `LOGBROOK_ARCHIVE_AFTER_MS` | `86400000` | Event age before archiving to Parquet. |
+| `LOGBROOK_MAINTENANCE_INTERVAL_SECS` | `60` | Seconds between maintenance passes. |
+
+To add an admin token for index administration, put `LOGBROOK_ADMIN_TOKEN` in `.env`, uncomment its line in `compose.yaml`, and recreate the service. Compose passes only mapped variables, so the token in `.env` alone does nothing. Leave the line commented out when you have no admin token, because an empty token is invalid.
+
+For separate ingestion sources, scoped readers, or per-index policies, mount a TOML file instead. See [the configuration file](/configure/configuration-file/).
+
+<Aside type="note" title="Plain HTTP">
+Logbrook serves plain HTTP and the template binds the host port to loopback. Put a TLS-terminating reverse proxy in front of it before exposing it to other machines. Containers on the same Compose network reach it at `http://logbrook:3100`.
+</Aside>
+
+<Aside type="tip" title="Building from a checkout">
+The repository's root [`compose.yaml`](https://github.com/sandrinodm/logbrook/blob/main/compose.yaml) builds the image from source. From a checkout, export `LOGBROOK_INGEST_TOKEN` and `LOGBROOK_READ_TOKEN`, then run `docker compose up --build -d`.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Run in production" description="Reverse proxy, backups and sizing." href="/operate/production/" />
+  <LinkCard title="Credentials and roles" description="Ingestion, read and admin tokens." href="/configure/credentials/" />
+  <LinkCard title="Send logs over HTTP" description="Wire your applications to Logbrook." href="/send-logs/http/" />
+</CardGrid>

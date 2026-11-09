@@ -5,4 +5,90 @@ sidebar:
   order: 4
 ---
 
-This page is being written.
+You will build the `logbrook` executable from a checkout, run it in the foreground on `127.0.0.1:3100`, send an event, and search it. Run every command from the repository root.
+
+## Prerequisites
+
+- **Rust**, installed with [rustup](https://rustup.rs). The repository pins Rust 1.99.1 in `rust-toolchain.toml`, and rustup installs that version on your first `cargo` command.
+- **A C++ compiler** for the bundled DuckDB build. On macOS, install the Xcode command-line tools with `xcode-select --install`.
+- **`openssl` and `curl`** for the commands below.
+
+If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` or open a new shell.
+
+## Build and run
+
+<Steps>
+  <Step title="Clone and build">
+    ```sh
+    git clone https://github.com/sandrinodm/logbrook.git
+    cd logbrook
+    cargo build --package logbrook --locked --release
+    ```
+
+    The first build compiles DuckDB from source and takes several minutes.
+  </Step>
+  <Step title="Start the server">
+    Generate separate ingestion and read credentials, print them for the second terminal, validate the configuration, and start the server.
+
+    ```sh
+    export LOGBROOK_INGEST_TOKEN="$(openssl rand -hex 24)"
+    export LOGBROOK_READ_TOKEN="$(openssl rand -hex 24)"
+    echo "Ingest token: $LOGBROOK_INGEST_TOKEN"
+    echo "Read token:   $LOGBROOK_READ_TOKEN"
+
+    target/release/logbrook check-config
+    target/release/logbrook serve
+    ```
+
+    `serve` stays in the foreground and writes JSON logs to stderr. Press Ctrl-C to stop it. Without a configuration file, Logbrook listens on `127.0.0.1:3100`, stores data in `./data`, and keeps events for seven days with no disk-size target.
+  </Step>
+  <Step title="Send an event">
+    In a second terminal in the repository root, set the ingestion token from the previous step. This sends one event to an index named `payments`.
+
+    ```sh
+    export LOGBROOK_INGEST_TOKEN='<ingest token from the first terminal>'
+
+    curl --fail http://127.0.0.1:3100/indexes/payments/logs/ingest \
+      -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
+      -H 'Content-Type: application/json' \
+      --data "[{\"time\":$(( $(date +%s) * 1000 )),\"level\":30,\"service\":\"checkout\",\"msg\":\"Order accepted\",\"orderId\":\"demo-1\"}]"
+    ```
+
+    ```json
+    {"accepted":1}
+    ```
+
+    The `payments` index did not exist, so this write also created it.
+  </Step>
+  <Step title="Search">
+    Set the read token, then query the index with the CLI:
+
+    ```sh
+    export LOGBROOK_READ_TOKEN='<read token from the first terminal>'
+    target/release/logbrook query payments --since 1h
+    ```
+
+    Add `--json` to see the complete record, including the `orderId` attribute.
+  </Step>
+</Steps>
+
+## Use a configuration file
+
+Settings resolve in this order: built-in defaults, then an optional TOML file passed with `--config`, then supported `LOGBROOK_*` environment variables.
+
+```sh
+cp logbrook.example.toml logbrook.local.toml
+# Edit logbrook.local.toml and replace every replace-with-... credential.
+target/release/logbrook --config logbrook.local.toml check-config
+target/release/logbrook --config logbrook.local.toml serve
+```
+
+Git ignores `*.local.toml` files. Environment variables override the file, so unset the token variables from the steps above if you want the file's credentials to apply. See [the configuration file](/configure/configuration-file/).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Run with Docker Compose" description="A persistent deployment with a data volume." href="/get-started/docker-compose/" />
+  <LinkCard title="Configuration file" description="Every setting, with defaults." href="/configure/configuration-file/" />
+  <LinkCard title="CLI reference" description="query, count and index management." href="/reference/cli/" />
+</CardGrid>

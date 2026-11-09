@@ -1,8 +1,78 @@
 ---
 title: "Glossary"
-description: "The terms these docs use, in alphabetical order."
+description: "Definitions of the terms Logbrook uses, with links to the pages that cover them."
 sidebar:
   order: 3
 ---
 
-This page is being written.
+Terms are in alphabetical order.
+
+**Accepted batch.** A batch of events that Logbrook has committed to storage and answered with a success response. There are no idempotency keys, so retrying after a lost response can store the events twice. See [send logs over HTTP](/send-logs/http/).
+
+**Admin token.** A credential that manages indexes (list, show, create, delete) and nothing else. It cannot read or ingest events. See [credentials and roles](/configure/credentials/).
+
+**Archive.** A Parquet file holding older events. Archived events stay searchable alongside recent ones until they expire. See [archives and retention](/concepts/archives-and-retention/).
+
+**Attribute.** A custom field of an event. Every top-level key of an ingested event that is not a built-in field is stored under `attributes`. See [attribute filters](/query/attribute-filters/).
+
+**Attribute filter.** An exact-equality condition on a top-level attribute, passed as JSON in `--filter` or the `filter` parameter. See [attribute filters](/query/attribute-filters/).
+
+**Cursor.** An opaque token returned as `next_cursor` by a search. Sending it back fetches the next page of the same query. It is bound to the index, route style, time range, filters and page size. See [pagination and export](/query/pagination-and-export/).
+
+**DuckDB.** The embedded database that stores recent events of each index. See [archives and retention](/concepts/archives-and-retention/).
+
+**Event.** One log record. It has an `id`, an event time, a received time, a level, a message, optional service, logger, host and pid, and structured attributes. See [events and time](/concepts/events-and-time/).
+
+**Event time.** The timestamp the producer sends, in Unix milliseconds. Search, histograms, archiving and age-based retention all use it. Returned as `event_time`. See [events and time](/concepts/events-and-time/).
+
+**Facet.** A list of the most frequent values of a built-in field (service, logger, host, level or source) among matching events, with counts. Each facet holds at most 100 values. See [counts, facets and histograms](/query/aggregations/).
+
+**Forward.** The Fluent Forward protocol. Logbrook can run a Forward receiver so Fluent Forward clients such as Docker's `fluentd` logging driver can send logs without an HTTP client. See [forward listener](/configure/forward-listener/) and [Docker and Fluent Forward](/send-logs/docker-forward/).
+
+**Gap.** A live tail frame that ends the stream because the resume point has expired under retention, or an event exceeds the per-subscriber output limit. Search the retained history to fill it. See [live tail](/query/live-tail/).
+
+**Histogram.** Counts of matching events in fixed-width time buckets. A request covers at most 2,000 buckets, and empty buckets are omitted. See [counts, facets and histograms](/query/aggregations/).
+
+**Index.** A named collection of events with its own DuckDB database, archives and retention policy. Each request names one index. The `default` index always exists. See [indexes, services and sources](/concepts/indexes-services-sources/).
+
+**Ingestion token.** A credential that writes events to one source and can be limited to specific indexes. See [credentials and roles](/configure/credentials/).
+
+**Last-Event-ID.** The HTTP header a client sends to resume a live tail from the last SSE `id` it processed. See [live tail](/query/live-tail/).
+
+**Level.** The numeric severity of an event, a nonnegative integer. The docs use Pino's numbers: 10 trace, 20 debug, 30 info, 40 warn, 50 error, 60 fatal. `min_level` matches `level >= n`. See [search and filter](/query/search/).
+
+**Live tail.** A Server-Sent Events stream of newly ingested events, with resume from `Last-Event-ID`. It follows ingestion order. See [live tail](/query/live-tail/).
+
+**Logger.** The name of the component that wrote the event, taken from the `name` field of a Pino-style event. Returned as `logger`.
+
+**NDJSON.** Newline-delimited JSON, one event per line. Accepted by ingestion with `Content-Type: application/x-ndjson` and by `logbrook import --ndjson`. See [send logs over HTTP](/send-logs/http/).
+
+**Pino.** A Node.js logger whose output (`time`, `level`, `msg`, `name`, `hostname`) maps directly to Logbrook's fields. See [Node.js with Pino](/send-logs/pino/).
+
+**Projection.** A durable layout that speeds up queries on promoted attributes. `logbrook projection-status` reports how many rows it covers. See [CLI reference](/reference/cli/#projection-status).
+
+**Promoted attribute.** A string attribute key listed in `promoted_string_keys` so that string equality filters on it are faster. Up to eight keys, fixed once an index is activated. See [indexes and retention](/configure/indexes-and-retention/).
+
+**Read token.** A credential that searches, counts, aggregates and tails events. It can be limited to certain sources and indexes. See [credentials and roles](/configure/credentials/).
+
+**Received time.** When Logbrook received the event, in Unix milliseconds. Returned as `received_at`. It is later than the event time for delayed logs. See [events and time](/concepts/events-and-time/).
+
+**Retention.** How long an index keeps events, measured by event time, plus an optional size target. Raising retention does not bring back expired events. See [indexes and retention](/configure/indexes-and-retention/).
+
+**Search.** A query that returns the newest matching events in a time range, one page at a time. See [search and filter](/query/search/).
+
+**Service.** The application or component that produced an event, from its `service` field. See [indexes, services and sources](/concepts/indexes-services-sources/).
+
+**Size target.** An optional per-index disk limit. When an index reaches it, Logbrook expires the oldest events before their age limit, and ingestion returns `507`. It is a target, not a hard filesystem quota. See [archives and retention](/concepts/archives-and-retention/).
+
+**Source.** A name the server configuration assigns to an ingestion credential. It is stamped on every event that credential sends, and the payload cannot override it. See [indexes, services and sources](/concepts/indexes-services-sources/).
+
+**SSE.** Server-Sent Events, the streaming format live tail uses. Frames are `log`, `cursor`, `gap` and `error`. See [live tail](/query/live-tail/).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="What is Logbrook" href="/get-started/overview/" description="The big picture." />
+  <LinkCard title="Concepts" href="/concepts/events-and-time/" description="Events, time and indexes." />
+  <LinkCard title="Search and filter" href="/query/search/" description="Start querying." />
+</CardGrid>

@@ -5,4 +5,321 @@ sidebar:
   order: 3
 ---
 
-This page is being written.
+Logbrook can receive logs over the [Forward protocol v1](https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1). That lets Docker's built-in `fluentd` logging driver, Fluentd and Fluent Bit send logs to Logbrook with no change to your applications. You will enable the listener, route a tag to an index and point containers at it.
+
+The receiver runs in the same `logbrook serve` process as the HTTP API. It is off by default and configured only in TOML. HTTP tokens are still required, and Forward clients authenticate as separate principals. For every setting, see the [Forward listener reference](/configure/forward-listener/).
+
+## Enable the listener
+
+Merge this into your server configuration and keep your HTTP credentials:
+
+```toml title="logbrook.toml"
+[indexes.application]
+
+[forward]
+enabled = true
+
+[[forward.listeners]]
+name = "docker-local"
+bind = "127.0.0.1:24224"
+security = "trusted_local"
+principal = "docker-host"
+
+[forward.principals.docker-host]
+source = "docker-host"
+indexes = ["application"]
+
+[[forward.routes]]
+listener = "docker-local"
+tag_prefix = "application."
+index = "application"
+normalizer = "docker"
+json_profile = "json_auto"
+service_from = "tag_suffix"
+host = "application-host"
+```
+
+This creates three things:
+
+- A listener on loopback that trusts every local client. See [authentication](/configure/forward-listener/#authentication).
+- A principal that fixes the stored `source` to `docker-host` and limits writes to the `application` index.
+- A route that sends every tag starting with `application.` to the `application` index, parses Docker records, and takes the service name from the rest of the tag.
+
+The principal sets the stored `source` and the route sets the destination index. Nothing in a record can change either. Use `tag` instead of `tag_prefix` to match one exact tag. Routes on the same listener can't overlap.
+
+## Run a local Docker route
+
+This walkthrough assumes the server runs on the same host as the Docker daemon, with the configuration above.
+
+<Steps>
+<Step title="Validate the configuration">
+
+```sh
+logbrook --config logbrook.toml check-config
+```
+
+```text
+Configuration is valid
+```
+
+</Step>
+<Step title="Start the server">
+
+Restart `logbrook serve` so it loads the `[forward]` section. If a listener can't bind, startup fails and the HTTP API doesn't start.
+
+</Step>
+<Step title="Start a container with the fluentd driver">
+
+```sh
+docker run --rm \
+  --log-driver fluentd \
+  --log-opt fluentd-address=127.0.0.1:24224 \
+  --log-opt fluentd-async=true \
+  --log-opt fluentd-request-ack=true \
+  --log-opt fluentd-sub-second-precision=true \
+  --log-opt tag=application.api \
+  busybox:1.37 sh -c 'echo logbrook-forward-test; sleep 2'
+```
+
+</Step>
+<Step title="Query the event">
+
+```sh
+export LOGBROOK_URL=http://127.0.0.1:3100
+export LOGBROOK_READ_TOKEN='<your read token>'
+
+logbrook query application --since 5m --service api --json
+```
+
+The event has `service` `api` (from the tag suffix), `host` `application-host`, `source` `docker-host`, and the container line as `message`.
+
+</Step>
+</Steps>
+
+<Aside type="note" title="Check your Docker version">
+Containers pick up logging options only when they are created. Check the options against your Docker Engine version and send a test event before you move real traffic.
+</Aside>
+
+## Configure containers
+
+### Per container
+
+Pass the driver and its options when you start the container:
+
+```sh
+docker run -d --name api \
+  --log-driver fluentd \
+  --log-opt fluentd-address=127.0.0.1:24224 \
+  --log-opt fluentd-async=true \
+  --log-opt fluentd-request-ack=true \
+  --log-opt fluentd-sub-second-precision=true \
+  --log-opt fluentd-buffer-limit=8192 \
+  --log-opt fluentd-write-timeout=5s \
+  --log-opt tag=application.api \
+  your-image
+```
+
+### Docker Compose
+
+```yaml title="compose.yaml"
+services:
+  api:
+    image: your-image
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: "127.0.0.1:24224"
+        fluentd-async: "true"
+        fluentd-sub-second-precision: "true"
+        fluentd-request-ack: "true"
+        fluentd-buffer-limit: "8192"
+        fluentd-write-timeout: "5s"
+        tag: "application.api"
+        cache-max-size: "10m"
+        cache-max-file: "3"
+```
+
+The address is the one the Docker daemon sees, not the one the container sees. The daemon connects, so `127.0.0.1` means the host.
+
+| Option | Why |
+| --- | --- |
+| `fluentd-address` | Where the daemon connects. |
+| `tag` | Must match a route. Here `application.api` matches `application.` and gives the service `api`. |
+| `fluentd-request-ack` | Ask Logbrook to confirm each envelope after it commits. |
+| `fluentd-async` | Keep on whenever you set `fluentd-request-ack`. |
+| `fluentd-sub-second-precision` | Send timestamps with sub-second precision. |
+| `fluentd-write-timeout` | Limits socket writes. It doesn't limit the wait for an ACK. |
+| `cache-max-size`, `cache-max-file` | Keep a local copy for `docker logs` only. |
+
+<Aside type="caution" title="Keep fluentd-async on with ACKs">
+Without `fluentd-async`, Docker Engine 28.0.4 (whose driver uses fluent-logger-golang 1.9.0) sends stdout and stderr lines from separate goroutines over one connection and can mix up their ACKs. The driver then resends both lines in a loop without backoff, which stores duplicates and overloads the receiver. In async mode the driver sends one envelope at a time.
+</Aside>
+
+## Run Logbrook in a container
+
+To receive Forward traffic inside a container, bind `0.0.0.0:24224`, set `trusted_network = true`, and publish the port on loopback only, for example `127.0.0.1:24524:24224`. Containers then log to `127.0.0.1:24524`.
+
+<Aside type="caution" title="Any container on the network can connect">
+A `trusted_local` listener has no authentication. Any other container on the receiver's network can write once `trusted_network = true`. Use an isolated network, or an authenticated listener for sources you don't trust.
+</Aside>
+
+The [Forward Compose example](https://github.com/sandrinodm/logbrook/tree/main/examples/forward) does this. It keeps the image's non-root user, a read-only root filesystem, all capabilities dropped and a 35-second stop grace period. Its configuration:
+
+```toml title="examples/forward/logbrook.toml"
+# HTTP credentials are provided by compose.yaml environment variables.
+bind = "0.0.0.0:3100"
+
+[indexes.application]
+
+[forward]
+enabled = true
+
+[[forward.listeners]]
+name = "docker"
+bind = "0.0.0.0:24224"
+security = "trusted_local"
+trusted_network = true
+principal = "docker-host"
+
+[forward.principals.docker-host]
+source = "docker-host"
+indexes = ["application"]
+
+[[forward.routes]]
+listener = "docker"
+tag_prefix = "application."
+index = "application"
+normalizer = "docker"
+json_profile = "json_auto"
+service_from = "tag_suffix"
+host = "docker-host"
+```
+
+The server service in its `compose.yaml` publishes both ports on loopback:
+
+```yaml title="examples/forward/compose.yaml"
+    ports:
+      - "127.0.0.1:3100:3100"
+      - "127.0.0.1:24524:24224"
+```
+
+A `smoke` profile starts a disposable BusyBox container that logs one synthetic line through the driver:
+
+```sh
+cd examples/forward
+export LOGBROOK_INGEST_TOKEN='<random ingestion token>'
+export LOGBROOK_READ_TOKEN='<different random read token>'
+
+docker compose up -d --build logbrook
+docker compose --profile smoke run --rm producer
+```
+
+Then query `application` for the `logbrook-forward-synthetic` message.
+
+## Use Fluentd or Fluent Bit
+
+Collectors send the same protocol. Create a listener, a principal and a route as above, with a route `tag` or `tag_prefix` that matches the tags your collector emits, then point the collector's forward output at the listener.
+
+```text title="Fluent Bit"
+[OUTPUT]
+    Name                  forward
+    Match                 application.*
+    Host                  logbrook.internal
+    Port                  24224
+    Require_ack_response  True
+```
+
+```text title="Fluentd"
+<match application.**>
+  @type forward
+  require_ack_response true
+  heartbeat_type none
+  <server>
+    host logbrook.internal
+    port 24224
+  </server>
+</match>
+```
+
+These snippets come from the collectors' own option names, not from the Logbrook repository, so check them against your collector version. Notes that apply to Logbrook:
+
+- Use a `generic` route (the default `normalizer`) for collector output. A generic route doesn't detect Docker records from a `log` field.
+- Fluentd 1.20.1 defaults to `heartbeat_type transport`. For ACK-based TCP or TLS delivery, `heartbeat_type none` skips the separate probes and relies on the ACK timeout. If the sender uses UDP heartbeats, set `udp_heartbeat = true` on the listener. A non-loopback listener then also needs `allow_peers`.
+- Across a network you don't trust, use a `shared_key` listener with TLS, or `mtls`. See [authentication](/configure/forward-listener/#authentication).
+
+## Delivery and acknowledgements
+
+Logbrook validates each envelope as a whole and commits it to one index in one transaction. It never splits an envelope.
+
+- If the envelope carries a `chunk` option, Logbrook sends the ACK only after the commit. An ACK means the whole envelope is stored.
+- An empty envelope is a valid no-op and is ACKed.
+- A corrupt last entry or a bad gzip checksum rejects every entry in the envelope.
+- Rejected, overloaded or failed envelopes close the connection without an ACK. There is no negative ACK with a reason, so a sender can retry a permanently invalid record forever. Check `logbrook_forward_*` [metrics](/configure/forward-listener/#metrics) and the server log for the reason.
+- A commit that has started finishes even if the client disconnects.
+
+<Aside type="caution" title="Retries can store duplicates">
+A missing ACK doesn't mean the envelope failed. A sender that retries after losing the connection or the ACK can store duplicates. Logbrook has no deduplication, and Forward is not exactly-once.
+</Aside>
+
+On shutdown Logbrook stops accepting envelopes, drops incomplete frames without an ACK, and finishes admitted commits and their ACKs within `shutdown_timeout_secs`. The sender may retry anything not ACKed by then.
+
+Supported modes are Message, Forward, PackedForward (as `bin` or `str`) and gzip CompressedPackedForward, including payloads made of several gzip members. Timestamps can be integer seconds or EventTime. Not supported: JSON transport, zstd, metrics and traces, reassembly of fragmented records, quarantine of rejected records, deduplication, replication and clustering.
+
+## How records become events
+
+Events are stored with millisecond precision. The original seconds and nanoseconds are kept in `attributes.forward`.
+
+### Generic routes
+
+A generic route stores the record under `attributes.application`. The message is the first string field listed in `message_fields` (default `["message", "msg"]`), or the record as JSON when none matches.
+
+### Docker routes
+
+A route with `normalizer = "docker"` needs `container_id`, `container_name`, `source` and `log`, each present once as a string. Otherwise the event is stored as a generic record with a fallback marker in `attributes.logbrook`.
+
+- The driver's `source` (stdout or stderr) goes to `attributes.docker.stream`, not the stored source.
+- `container_name` keeps its leading slash.
+- Other driver fields go to `attributes.docker.extra`.
+
+The `json_profile` setting decides how the `log` line is read:
+
+| `json_profile` | Message and level |
+| --- | --- |
+| `text` (default) | The line as is, at `default_level` (default 30). |
+| `pino` | String `msg` and a nonnegative integer `level`. |
+| `json_auto` | The first string in `message_fields`. The level comes from `level` or `severity` by name. |
+
+`json_auto` maps level names, ignoring case: trace 10, debug 20, info 30, warn or warning 40, error 50, fatal or critical 60. Anything else gets `default_level`. Both JSON profiles also read `logger` or `name`, a nonnegative integer `pid`, and `service`.
+
+A line that isn't a JSON object with a message keeps the original line, including whitespace and stack traces. When parsing changes the message, the original line is also stored in `attributes.docker.log`.
+
+### Service, host and time
+
+The stored service is the first of these that is set:
+
+1. The route's `service`, or the tag suffix when `service_from = "tag_suffix"`.
+2. The field named by `compose_service_label`, at the top level or inside a `labels` map.
+3. The application's `service` field.
+4. The container name without its leading slash.
+
+The host comes only from the route's `host`, never from the peer address.
+
+Events use the Forward timestamp by default. To use a timestamp from the record, set both `application_time_field = "time"` and `application_time_format = "unix_ms"` (or `"unix_seconds"`). The value must be an integer within the index's retention window and future-skew limit. Otherwise the event keeps the Forward timestamp, and `attributes.logbrook.application_time_status` records why.
+
+### Long lines
+
+Docker splits long lines into partial messages. A record with any `partial_*` field is stored as its own event without JSON parsing, with `partial_id`, `partial_ordinal`, `partial_last`, the original fields and a validity flag in `attributes.docker.fragment`. Logbrook never reassembles them.
+
+### Binary and unusual records
+
+Records must be maps with string keys at the top level, or the envelope is rejected. Records with unique UTF-8 keys and JSON-compatible values are stored as plain JSON. Records with duplicate keys, invalid UTF-8, binary values, unknown extensions, non-finite floats or non-string nested keys use the `msgpack_typed_v1` encoding. The exact original bytes are kept in `attributes.forward.original_record_msgpack_b64`.
+
+Fluent Bit's logs metadata format is supported when the envelope sets `fluent_signal = 0`. The metadata goes to `attributes.forward.metadata`. Other signal values and malformed metadata are rejected.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Forward listener reference" href="/configure/forward-listener/" description="Every listener, route, limit and metric." />
+  <LinkCard title="Attribute filters" href="/query/attribute-filters/" description="Filter on fields stored under attributes." />
+  <LinkCard title="Run in production" href="/operate/production/" description="Harden and monitor the deployment." />
+</CardGrid>

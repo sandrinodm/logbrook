@@ -1,8 +1,174 @@
 ---
 title: "HTTP API guide"
-description: "Routes, authentication, payloads, limits and errors of the Logbrook HTTP API."
+description: "Routes, credentials, request and response shapes, errors and limits of the Logbrook HTTP API."
 sidebar:
   order: 2
 ---
 
-This page is being written.
+This guide covers how the Logbrook HTTP API fits together: which routes exist, who may call them, what they return and how they fail. For every parameter and response schema, use the generated [API reference](/api/). The same contract is served by every running server at `GET /openapi.json`.
+
+The examples assume `$LOGBROOK_URL` and a token in the matching environment variable.
+
+## Routes
+
+Named routes address one index per request. The unprefixed routes address the `default` index.
+
+| Method and path | Credential | Success |
+| --- | --- | --- |
+| `POST /indexes/{index}/logs/ingest` | Ingestion | `200`, `{"accepted":N}` after the batch is committed |
+| `GET /indexes/{index}/logs` | Read | `200`, `{"events":[...],"next_cursor":...}` |
+| `GET /indexes/{index}/logs/count` | Read | `200`, `{"count":N}` |
+| `GET /indexes/{index}/logs/facets` | Read | `200`, five arrays of value and count pairs |
+| `GET /indexes/{index}/logs/histogram` | Read | `200`, `{"buckets":[...]}` |
+| `GET /indexes/{index}/logs/tail` | Read | `200`, `text/event-stream` |
+| `GET /indexes` | Read or admin | `200`, `{"indexes":[...]}` |
+| `GET /indexes/{index}` | Read or admin | `200`, index information |
+| `PUT /indexes/{index}` | Ingestion or admin | `200`, `{"name":"..."}` |
+| `DELETE /indexes/{index}` | Admin | `200`, `{"deleted":"..."}` |
+| `GET /metrics` | Unrestricted read | `200`, Prometheus text |
+| `GET /health` | None | `200`, `{"status":"ok"}` |
+| `GET /ready` | None | `200`, `{"status":"ready"}`, or `503` |
+| `GET /openapi.json` | None | `200`, OpenAPI JSON |
+
+The default-index routes are `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram` and `/logs/tail`. They follow the same credential rules. Use the named routes in new clients. Cursors and tail IDs from the two route styles are not interchangeable, even for `default`.
+
+## Authentication and roles
+
+Send `Authorization: Bearer <token>`. Each credential has exactly one role, and the roles do not overlap: an admin token cannot read or ingest events, and a read token cannot ingest. Tokens are 16 to 512 visible ASCII characters with no whitespace, and the server refuses to start with others.
+
+| Role | Can do |
+| --- | --- |
+| Ingestion | Ingest into its allowed indexes, stamped with one **source**. Create indexes. |
+| Read | Search, count, facets, histogram and tail, limited to its allowed sources and indexes. List and show indexes. |
+| Admin | List, show, create and delete indexes. Nothing else. |
+
+A read token has a list of allowed sources, where an empty list allows all. Ingestion and read tokens can also be limited to exact index names. A read must pass both restrictions. Naming a source outside the token's list returns `403`. `/metrics` needs a read token with no source or index restriction. Names and scopes have no wildcards. See [credentials and roles](/configure/credentials/).
+
+## Ingest
+
+```sh
+curl --fail-with-body --silent --show-error \
+  "$LOGBROOK_URL/indexes/checkout/logs/ingest" \
+  -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '[{"time":1791453599000,"level":50,"msg":"payment timeout","service":"checkout"}]'
+```
+
+```json
+{"accepted":1}
+```
+
+- The body is a nonempty JSON array of objects, even for one event. For NDJSON send `Content-Type: application/x-ndjson` (or `application/ndjson`) with one object per line. Other media types return `400`.
+- `time` (Unix milliseconds), `level` (integer) and `msg` (string) are required. `service`, `name`, `hostname` and `pid` are optional. Every other key becomes an attribute.
+- A batch is accepted or rejected as a whole. A `200` means it is committed.
+- There are no idempotency keys. After a timeout, retrying can store duplicates.
+- Ingesting into a missing index creates it. `GET` routes return `404` for an unknown index.
+
+See [send logs over HTTP](/send-logs/http/).
+
+## Query
+
+Search, count, facets and histogram take integer Unix millisecond `from` and `to` with `0 <= from < to <= 253402300799999`. The range is half-open and spans at most 31 days by default. Filters are `source`, `service`, `logger`, `host`, `message`, `min_level` and `filter`. Search also takes `limit` and `cursor`, and histogram takes `interval_ms`. Tail takes the filters only. Unknown parameters return `400`. URL-encode every parameter.
+
+Details: [search and filter](/query/search/), [attribute filters](/query/attribute-filters/), [aggregations](/query/aggregations/), [pagination and export](/query/pagination-and-export/) and [live tail](/query/live-tail/).
+
+Search results look like this:
+
+```json
+{
+  "events": [{
+    "id": "2", "source": "production",
+    "event_time": 1791453599000, "received_at": 1791453600000,
+    "level": 50, "service": "checkout", "logger": "http",
+    "host": "api-1", "pid": null, "message": "payment timeout",
+    "attributes": {"requestId": "demo-002"}
+  }],
+  "next_cursor": null
+}
+```
+
+Facets return `services`, `loggers`, `hosts`, `levels` and `sources`, each with at most 100 `{"value","count"}` pairs. Histograms return `{"buckets":[{"time":...,"count":...}]}` with at most 2,000 buckets per request.
+
+## Index management
+
+An index name has 1 to 63 lowercase ASCII letters, digits, `-` or `_`, and starts with a letter or digit. `PUT /indexes/{index}` is idempotent, reads no body and cannot set retention or a size limit. By default the server allows four indexes including `default`. Creating one more returns `429`.
+
+`GET /indexes` lists only the indexes the credential can reach. Admin tokens and unrestricted read tokens also get sizes, policy and readiness:
+
+```json
+{
+  "name": "checkout",
+  "size_bytes": 10485760,
+  "database_bytes": 10485760,
+  "wal_bytes": 0,
+  "archive_bytes": 0,
+  "temp_bytes": 0,
+  "other_bytes": 0,
+  "max_size_bytes": null,
+  "retention_ms": 604800000,
+  "ready": true
+}
+```
+
+A read token restricted to particular sources gets only `{"name":"checkout"}`. `max_size_bytes: null` means no size limit.
+
+`DELETE` needs an admin token. `default` and indexes declared in the server configuration cannot be deleted (`400`). A later ingestion recreates a deleted name, so stop producers first.
+
+## Errors
+
+Errors are JSON objects: `{"error":"explanation"}`. The text is for people. Do not parse it as a code.
+
+| Status | Meaning | Client action |
+| --- | --- | --- |
+| `400` | Invalid payload, media type or parameters, bad time range, protected deletion, or an invalid or expired cursor | Correct the request, or start a new search |
+| `401` | Missing, malformed or unknown token, or the wrong role | Check the token and its role |
+| `403` | Valid token, but the source or index is outside its scope, or deletion by a non-admin | Use a token with access |
+| `404` | Unknown index or endpoint | Create the index or fix the path |
+| `405` | Known route, unsupported method | Fix the method |
+| `413` | Body, event, metadata or response too large | Shrink the request or the result |
+| `429` | Admission, worker, tail subscriber or index-count pressure. Includes `Retry-After: 1`. | Retry with bounded backoff |
+| `503` | Storage unavailable, integrity failure or shutdown | Check `/ready` and the server logs |
+| `504` | Body receive or query deadline exceeded | Narrow the query. An ingestion outcome may be uncertain. |
+| `507` | The index has reached its size target | Raise the limit or wait for expiry |
+
+Retrying an ingestion after `429` or `504` can duplicate events.
+
+## Limits
+
+Operators can change each of these in the configuration. Request, body memory, connection and tail limits are shared by all indexes.
+
+| Limit | Default |
+| --- | --- |
+| Request body / single event | 1 MiB / 64 KiB |
+| Events per batch | 1,000 |
+| Field string or metadata key | 4 KiB |
+| JSON nesting depth | 16 |
+| Live retention / future skew | 7 days / 5 minutes |
+| Query span / page size / response bytes | 31 days / 1,000 events / 8 MiB |
+| Query deadline | 5 seconds |
+| Tail subscribers / output bytes per subscriber | 8 / 1 MiB |
+| Index count, including `default` | 4 |
+| Log GET request target (path and query) | 32,768 bytes |
+| Sources per query | 128 |
+
+See [limits and errors](/operate/limits-and-errors/).
+
+## Health, readiness and metrics
+
+`/health` is a public liveness check. `/ready` returns `503` with an error object when any index's storage is unavailable. It does not check free disk space. `/metrics` serves Prometheus text. See [health, readiness and metrics](/operate/monitoring/).
+
+## The OpenAPI contract
+
+```sh
+curl --silent "$LOGBROOK_URL/openapi.json" | jq '.paths | keys'
+```
+
+The generated [API reference](/api/) on this site is built from the same file.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="API reference" href="/api/" description="Every operation, parameter and schema." />
+  <LinkCard title="Send logs over HTTP" href="/send-logs/http/" description="Ingest in detail." />
+  <LinkCard title="Search and filter" href="/query/search/" description="Query in detail." />
+</CardGrid>

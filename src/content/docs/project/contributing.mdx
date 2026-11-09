@@ -5,4 +5,186 @@ sidebar:
   order: 1
 ---
 
-This page is being written.
+This page explains how to set up a development environment, which checks CI runs, and what a good pull request contains. The last section covers how to work on this documentation site.
+
+For a substantial feature or API change, [open an issue](https://github.com/sandrinodm/logbrook/issues) first to discuss the use case and approach. Report suspected security vulnerabilities privately; see [Security](/project/security/).
+
+## Report a bug
+
+Include:
+
+- The Logbrook version or commit, operating system and deployment method.
+- Relevant configuration.
+- Steps to reproduce, with expected and actual behavior.
+
+Use a small synthetic log sample when you can. Remove tokens, personal data and application secrets from logs and configuration before sharing them.
+
+## Set up a development environment
+
+Development uses the same pinned Rust toolchain as the server. Build prerequisites are in [Build from source](/get-started/build-from-source/). The Pino example uses Node.js and npm; CI uses Node.js 26.13.0.
+
+Use a separate data directory for development. Tests and load generators write synthetic events, and some checks kill their own test servers on purpose. Keep them away from production data.
+
+Code style:
+
+- Four spaces for Rust and two for JavaScript, as `.editorconfig` sets them.
+- Rustfmt and Prettier handle wrapping and spacing, and CI checks both.
+- Keep developer-tool dependencies in the `xtask` package and Prettier in the Pino example, so neither ends up in the server image.
+
+```sh
+cargo fmt --all
+npm --prefix examples/pino-logger run format
+```
+
+## Run the checks
+
+Run commands from the repository root. These are the Rust checks:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo build --package logbrook --locked
+cargo test --workspace --all-targets --locked
+```
+
+Tests use temporary data directories and disposable servers. The process tests in `tests/process.rs` start a real server and check that acknowledged events survive `SIGKILL`. They also cover restart, Parquet archival, restore to a new path, retention, per-index limits and the management CLI. Run them on their own after changes to storage, retention, indexes or the CLI:
+
+```sh
+cargo test --package logbrook --test process --locked
+```
+
+The release and skill-example tests need Bash, Git, jq and OpenSSL.
+
+### Checks by change type
+
+| You changed | Also run |
+| --- | --- |
+| The HTTP contract | Update `src/openapi.json`, `docs/API.md` and the affected API tests and examples |
+| The Pino example | `(cd examples/pino-logger && npm ci && npm run format:check && npm test)` |
+| Forward codec or normalization | The property tests and libFuzzer targets (below) |
+| The Forward receiver | The client interoperability test (below) |
+| The container | The container verification steps (below) |
+| Dependencies | Regenerate and review the third-party notices; CI checks they match the lockfile |
+
+### What CI runs
+
+The **Verify** workflow (`.github/workflows/ci.yml`) has three kinds of job:
+
+- **Checks.** Rust formatting, clippy and tests, the Forward interoperability test (including a negative control with corrupted ACKs), and dependency notice verification.
+- **Pino example.** Formatting and tests with Node.js 26.13.0.
+- **Packaging**, for `linux/amd64` and `linux/arm64`. Builds the native release container with an SBOM and provenance, then runs `cargo xtask image-inspect --image logbrook:ci --max-image-mib 110`, `container-smoke`, `check-cli` and a short `index-load`. The OCI archive is kept as an artifact.
+
+A separate workflow, `forward-fuzz.yml`, fuzzes the Forward parser.
+
+### Forward fuzzing and property tests
+
+Five libFuzzer targets exercise the Forward parser and normalizers from `src/forward`: `framing`, `envelope`, `packed_payload`, `options_timestamps` and `docker_normalize`. They run under AddressSanitizer in a standalone crate in `fuzz/`, so fuzzing dependencies never reach the server executable.
+
+```sh
+rustup toolchain install nightly-2026-11-01 --profile minimal --component rust-src
+cargo +nightly-2026-11-01 install cargo-fuzz --version 0.13.2 --locked
+python3 fuzz/seed_corpus.py
+cargo +nightly-2026-11-01 fuzz run envelope -- \
+  -max_total_time=60 -max_len=65536 -timeout=3 \
+  -rss_limit_mb=1024 -malloc_limit_mb=32 -dict="$PWD/fuzz/forward.dict"
+```
+
+Swap in another target name to fuzz another surface. CI runs each target for 30 seconds on relevant pull requests and pushes to `main`, and for five minutes every Monday. To reproduce a crash, run `cargo +nightly-2026-11-01 fuzz run TARGET PATH_TO_ARTIFACT`, and minimize it with `fuzz tmin`. Check in the minimized input and a focused regression test before you fix the bug.
+
+The shrinking property tests run with the normal workspace tests, and you can run them alone:
+
+```sh
+cargo test --package logbrook --test forward_properties --locked
+```
+
+See [`fuzz/README.md`](https://github.com/sandrinodm/logbrook/blob/main/fuzz/README.md) for the corpus rules.
+
+### Forward interoperability test
+
+This test sends logs from Docker's `fluentd` logging driver, Fluentd (including TLS and shared-key authentication) and Fluent Bit to a native server. It needs Python 3.9+, Docker and OpenSSL. On macOS with Docker Desktop or OrbStack:
+
+```sh
+cargo build --package logbrook --locked
+python3 tests/tools/forward_interop.py --binary target/debug/logbrook \
+  --host host.docker.internal --network bridge \
+  --output artifacts/forward/interop-macos.json
+```
+
+On Linux, use `--host 127.0.0.1 --network host`, as CI does. `--negative-control fluentd` or `--negative-control fluentbit` corrupts that client's ACKs, and the run must then fail.
+
+## Developer tools (`cargo xtask`)
+
+`cargo xtask` runs the `logbrook-dev` package in `xtask/`. It is a separate workspace package, so none of its dependencies end up in the server executable or the image. Container checks need Docker.
+
+| Command | Use |
+| --- | --- |
+| `cargo xtask container-smoke --image IMAGE` | Packaged API, authentication, Parquet archival, restart and hardening |
+| `cargo xtask check-cli --image IMAGE` | Index management and queries through the packaged CLI (or `--binary` for a native server) |
+| `cargo xtask image-inspect --image IMAGE --max-image-mib 110` | Image size, runtime user, license and dependency notices |
+| `cargo xtask notices --check` | Checked-in notices match the locked dependencies |
+| `cargo xtask version` | Prints the application version from `Cargo.toml` |
+| `cargo xtask release-version --dry-run patch` | Previews the next release version; see [Releases](/project/releases/) |
+| `cargo xtask index-load`, `mixed-load`, `forward-load` | Load generators |
+| `cargo xtask attribute-load`, `attribute-compare` | Attribute query benchmarks and comparisons |
+| `cargo xtask extended-load` | Longer container run with fixed CPU and memory limits |
+| `cargo xtask container-probe CONTAINER` | Reads cgroup counters from a running container |
+
+Every generator lists its options with `--help`. `mixed-load` writes to the server at `--url` (default `http://127.0.0.1:3100`), so point it at a server whose data you do not need. Write reports to `artifacts/`, which Git ignores. See [`xtask/README.md`](https://github.com/sandrinodm/logbrook/blob/main/xtask/README.md) for details.
+
+For container changes, build and verify a local image:
+
+```sh
+docker build --build-arg VCS_REF="$(git rev-parse HEAD 2>/dev/null || printf working-tree)" -t logbrook:local .
+cargo xtask image-inspect --image logbrook:local --max-image-mib 110
+cargo xtask container-smoke --image logbrook:local
+cargo xtask check-cli --image logbrook:local
+```
+
+For performance changes, include the workload, resource limits, record sizes, concurrency, and before and after measurements so someone else can reproduce them.
+
+## Submit a pull request
+
+- Keep changes focused on one problem and explain the resulting behavior.
+- Include a regression test for a bug fix when practical. Prefer tests of observable behavior over implementation details.
+- Update affected documentation and examples.
+- List the checks you ran and anything they did not cover. For storage or API changes, explain compatibility and migration effects.
+- Keep lockfiles in sync with dependency changes. Exclude credentials, database files, build output and local experiment results.
+
+Logbrook is licensed under MIT. Contributions are accepted under the same license.
+
+## Working on these docs
+
+This site is published at [sandrinodm.github.io/logbrook](https://sandrinodm.github.io/logbrook/) from an orphan branch named `docs-site`. It is built with Nimbus (Astro) and never merges into `main`. From a Logbrook checkout:
+
+```sh
+git worktree add ../logbrook-docs docs-site
+cd ../logbrook-docs
+npm ci
+npm run dev
+```
+
+The dev server runs at `http://localhost:4321/logbrook/`.
+
+- Pages live in `src/content/docs/`. The folder tree is the URL structure and the sidebar, and `sidebar.order` in the frontmatter orders pages within a group.
+- Components such as `<Steps>`, `<Tabs>` and `<Aside>` are available in every `.mdx` file without an import. See `src/components.ts`.
+- The API reference at `/api/` is generated from `src/api/openapi.json`. The deploy workflow replaces that file with `src/openapi.json` from `main`, so change the spec on `main`, not on the docs branch.
+
+Before you push, validate the pages:
+
+```sh
+npx @cloudflare/nimbus-docs check
+npm run build
+npx @cloudflare/nimbus-docs check
+```
+
+The second `check` verifies links in the built site.
+
+Pushes and pull requests to `docs-site` run `.github/workflows/pages.yml`, which checks and builds the site. Pushes also deploy to GitHub Pages. You can run the workflow by hand from the Actions tab to pick up a new API spec from `main`.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Build from source" description="Prerequisites and a first native run." href="/get-started/build-from-source/" />
+  <LinkCard title="Releases and container images" description="How versions and images are published." href="/project/releases/" />
+  <LinkCard title="Security" description="Report a vulnerability privately." href="/project/security/" />
+</CardGrid>

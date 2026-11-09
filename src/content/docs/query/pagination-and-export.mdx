@@ -1,8 +1,139 @@
 ---
 title: "Pagination and export"
-description: "Page through results with cursors and export complete windows as NDJSON, JSON or CSV."
+description: "Page through search results with cursors and export every matching event as NDJSON, JSON or CSV."
 sidebar:
   order: 4
 ---
 
-This page is being written.
+A search returns one page of events. To read more, follow the cursor. To work with the whole window, loop over the pages and write them to a file.
+
+## Page size
+
+Page size is 1 to 1,000 events, default 100. The server's configured maximum can be lower. The 1,000 default is the built-in cap.
+
+## Follow the cursor
+
+When more events match than fit in the page, the response includes `next_cursor`. Send it back as `cursor` to get the next page. Stop when `next_cursor` is null.
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+`--cursor` requires explicit `--from` and `--to`, because a relative `--since` window would move between runs.
+
+```sh
+logbrook query checkout --from 1791334800000 --to 1791338400000 --limit 100 --json
+logbrook query checkout --from 1791334800000 --to 1791338400000 --limit 100 \
+  --cursor '<next_cursor>' --json
+```
+
+In table output the cursor appears on a final `NEXT_CURSOR` row. The command fetches one page per run.
+
+</TabItem>
+<TabItem label="HTTP">
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'limit=100' \
+  --data-urlencode 'cursor=<next_cursor>'
+```
+
+</TabItem>
+</Tabs>
+
+### What a cursor is bound to
+
+A cursor is tied to the query it came from. Keep these the same on every page:
+
+- the index and the route style (`/indexes/{index}/logs` or the unprefixed `/logs`; cursors from the two are not interchangeable, even for `default`)
+- `from` and `to`
+- all filters and sources
+- the page size
+
+A request that changes any of them returns `400`. Listing the same sources or attribute conditions in a different order is fine.
+
+Treat the cursor as opaque. Do not build one from an event `id`, and do not use a live-tail ID as a cursor. A cursor is at most 1,024 bytes.
+
+### Consistency
+
+A paginated search only returns events that were ingested before its first page, even if later events fall inside the window. Start a new search to see them. It is not a snapshot: retention can remove events between pages or expire the cursor itself, which returns `400`. Cursors stay valid across server restarts. After an index is deleted and created again, start a new search. A cursor grants no access: every page is checked against the token that sends it.
+
+## Export every page as NDJSON
+
+This loop writes every page to `export.ndjson`, replacing any existing file. It stops after the last page and exits nonzero if a request fails. Delete a partial file before you retry.
+
+```sh
+export LOGBROOK_INDEX=checkout
+export TO=$(jq -nr 'now * 1000 | floor')
+export FROM=$((TO - 3600000))
+
+logbrook_page() {
+  logbrook query "$LOGBROOK_INDEX" --from "$FROM" --to "$TO" --limit 500 --json "$@"
+}
+
+(
+  set -eu
+  cursor=''
+  while :; do
+    if [ -n "$cursor" ]; then
+      page=$(logbrook_page --cursor "$cursor")
+    else
+      page=$(logbrook_page)
+    fi
+    printf '%s\n' "$page" | jq -c '.events[]'
+    cursor=$(printf '%s\n' "$page" | jq -r '.next_cursor // empty')
+    [ -n "$cursor" ] || break
+  done
+) > export.ndjson
+
+wc -l < export.ndjson
+```
+
+Add any filter options to `logbrook_page`. Fix the bounds once, outside the loop. Events that retention removes before their page is read are not exported.
+
+<Aside type="caution" title="Memory and response size">
+The CLI refuses a response larger than 16 MiB, and the server limits a response to 8 MiB by default. If a page is too large, lower `--limit` or narrow the filters.
+</Aside>
+
+## Project to JSON or CSV
+
+The server has no projection or CSV option. Reshape the NDJSON export on your machine with `jq`:
+
+```sh
+# JSON projection; timestamps stay in milliseconds, IDs stay strings.
+jq -c '{id, event_time, service, message, requestId: .attributes.requestId}' export.ndjson
+
+# CSV with a header and proper quoting.
+printf '%s\n' 'id,event_time,service,level,message'
+jq -r '[.id, .event_time, .service, .level, .message] | @csv' export.ndjson
+```
+
+## Filter an export client-side
+
+Anything the server cannot filter, you can filter on the export. Run these on the full export, not on a single page.
+
+```sh
+# Case-insensitive message match
+jq -c 'select(.message | test("timeout"; "i"))' export.ndjson
+
+# OR across two services
+jq -c 'select(.service == "api" or .service == "worker")' export.ndjson
+
+# Exclude health checks
+jq -c 'select(.message | contains("/health") | not)' export.ndjson
+
+# Numeric threshold on an attribute
+jq -c 'select((.attributes.durationMs // 0) >= 1000)' export.ndjson
+```
+
+`jq -s` loads the whole file into memory. For large windows prefer streaming filters, or the server-side [facets](/query/aggregations/) when the built-in fields are enough.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Cookbook" href="/query/cookbook/" description="An export in a worked investigation." />
+  <LinkCard title="Limits and errors" href="/operate/limits-and-errors/" description="Response limits and error codes." />
+  <LinkCard title="CLI reference" href="/reference/cli/" description="Every query option." />
+</CardGrid>

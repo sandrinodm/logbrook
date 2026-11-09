@@ -5,4 +5,115 @@ sidebar:
   order: 2
 ---
 
-This page is being written.
+This page explains how Logbrook versions are numbered and published, which image tags exist, and how to choose a tag or digest for your deployment. The second half is for maintainers who cut releases.
+
+## Pick an image
+
+Images are published to GitHub Container Registry as `ghcr.io/sandrinodm/logbrook`. Each release is one multi-platform image for `linux/amd64` and `linux/arm64`, with dependency notices, an SBOM and build provenance. Docker picks the right platform for your host.
+
+| Tag | Meaning |
+| --- | --- |
+| `0.1.0` | The release version, without the Git tag's `v` prefix |
+| `sha-<full-commit>` | The source commit of that release |
+| `latest` | Updated only when the maintainer selects it, and only for a stable version |
+
+Pull a version:
+
+```sh
+docker pull ghcr.io/sandrinodm/logbrook:0.1.0
+```
+
+To get exactly the same image every time, pull by digest. The GitHub release notes include a `docker pull` command, and `docker pull` prints the digest:
+
+```sh
+docker pull ghcr.io/sandrinodm/logbrook@sha256:<digest>
+```
+
+<Aside type="tip" title="Which to use">
+In production, pin a version tag at least, or a digest if you want to rule out any change. Avoid `latest`: it moves, and storage formats may change before a stable release. There are no downgrade migrations, so upgrade a copy first. See [backup, restore and upgrade](/operate/backup-and-upgrade/).
+</Aside>
+
+Logbrook is pre-release software at version 0.1.0. The `Dockerfile` labels the image with its version through `org.opencontainers.image.version`. Releases are listed on the [GitHub releases page](https://github.com/sandrinodm/logbrook/releases).
+
+## Versioning
+
+Versions are SemVer. The release workflow updates five version fields so they always agree:
+
+- the root `Cargo.toml`
+- the application's entry in `Cargo.lock`
+- the lockfile fingerprint in `THIRD_PARTY_NOTICES.txt`
+- the default image version in `Dockerfile`
+- `info.version` in `src/openapi.json`
+
+The Git tag is the version with a `v` prefix, for example `v0.1.0`. Prerelease versions such as `0.2.0-rc.1` produce a GitHub prerelease and can't be marked latest.
+
+## How a release is made
+
+The manual **Release** GitHub Actions workflow (`create-release.yml`) sets the application version, creates and pushes the Git tag, verifies and publishes the container image, and creates a GitHub release with generated notes. Pushes and pull requests run verification only.
+
+<Steps>
+<Step title="Push your changes to main">
+Commit and push everything that should be in the release.
+</Step>
+<Step title="Run the workflow">
+Open **Actions → Release → Run workflow** and select `main`.
+</Step>
+<Step title="Choose a version request">
+Use `current` for the first release (`0.1.0`), or one of the values below. Write explicit versions without a leading `v`.
+</Step>
+<Step title="Decide on latest">
+Enable **Also mark a stable release as latest** to update both the GHCR `latest` tag and GitHub's latest release.
+</Step>
+</Steps>
+
+| Version request | Result when `Cargo.toml` contains `0.1.0` |
+| --- | --- |
+| `current` | Release `0.1.0` without a version bump |
+| `patch` | Release `0.1.1` |
+| `minor` | Release `0.2.0` |
+| `major` | Release `1.0.0` |
+| `0.2.0-rc.1` | Release that exact prerelease version |
+
+The workflow rejects downgrades, build metadata such as `+build.1`, and versions whose tag already exists. To promote a prerelease, enter its stable version explicitly. You always choose the increment; commit messages do not.
+
+What happens:
+
+1. A read-only job prepares the version patch. A separate job with write access checks that the patch changes only the five fields and commits it as `chore(release): v<version>`. For `current` there is no version commit.
+2. The commit and the annotated tag go up together in one atomic, non-forced push. If `main` moved on or the tag exists, the run fails instead of overwriting anything.
+3. The full **Verify** workflow runs for that commit, including native container builds and smoke tests for both architectures.
+4. After every check passes, the OCI archives that verification built and tested are published to GHCR by digest and combined into a multi-platform image without rebuilding.
+5. The last job creates the `v<version>` GitHub release with generated notes and a `docker pull` command.
+
+Only one release runs at a time.
+
+### Preview a version locally
+
+```sh
+cargo xtask release-version --dry-run current
+cargo xtask release-version --dry-run patch
+cargo xtask release-version --dry-run 0.2.0-rc.1
+```
+
+This prints JSON with the previous version, the target version, the tag, and whether any file would change. It does not commit, tag, push or publish.
+
+### Retry a failed release
+
+Use **Re-run failed jobs** in the original run. The tag is pushed before verification, so a failed build leaves the tag in place without a GitHub release. Do not delete or move the tag.
+
+If the fix needs code changes, commit it and start a new release with a new version. Re-running all jobs, or starting `current` again, fails on the existing tag. CI keeps OCI artifacts for seven days; after that, release a new version instead of replacing a published image.
+
+### Publish an existing tag
+
+The **Release image** workflow (`release.yml`) verifies and publishes an existing, pushed tag that matches the root application version. It does not create the tag or a GitHub release. The error `couldn't find remote ref refs/tags/v0.1.0` means the tag does not exist on the remote; run **Release** instead.
+
+### Make the first package public
+
+GHCR packages start out private. After the first successful release, open the package's **Package settings**, find **Change visibility**, and choose **Public** to allow anonymous pulls.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Run in production" description="Run the image with the recommended hardening." href="/operate/production/" />
+  <LinkCard title="Backup and upgrade" description="Upgrade safely between releases." href="/operate/backup-and-upgrade/" />
+  <LinkCard title="Contributing" description="The checks every release runs." href="/project/contributing/" />
+</CardGrid>

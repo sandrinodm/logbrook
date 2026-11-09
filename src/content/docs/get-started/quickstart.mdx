@@ -5,4 +5,94 @@ sidebar:
   order: 2
 ---
 
-This page is being written.
+You will run the published container image, send one event with curl, and search it with the CLI and with curl. Data lives in a throwaway container, so nothing persists after you stop it. For a persistent setup, use [Docker Compose](/get-started/docker-compose/).
+
+## Prerequisites
+
+- Docker.
+- `curl` and `openssl` on the host.
+
+## Run it
+
+<Steps>
+  <Step title="Generate credentials">
+    Logbrook needs a separate ingestion token and read token. Each must be 16 to 512 visible ASCII characters with no whitespace.
+
+    ```sh
+    export LOGBROOK_INGEST_TOKEN="$(openssl rand -hex 24)"
+    export LOGBROOK_READ_TOKEN="$(openssl rand -hex 24)"
+    ```
+  </Step>
+  <Step title="Start the container">
+    The image sets `LOGBROOK_BIND=0.0.0.0:3100` and stores data in `/data`. The `127.0.0.1:` prefix publishes the port on the loopback interface only.
+
+    ```sh
+    docker run -d --name logbrook \
+      -p 127.0.0.1:3100:3100 \
+      -e LOGBROOK_INGEST_TOKEN \
+      -e LOGBROOK_READ_TOKEN \
+      ghcr.io/sandrinodm/logbrook:0.1.0
+    ```
+
+    Check that it is up:
+
+    ```sh
+    docker exec logbrook logbrook healthcheck
+    ```
+
+    If the check fails, run `docker logs logbrook`. The server writes JSON logs to stderr.
+  </Step>
+  <Step title="Send an event">
+    This writes one event to an index named `payments`. The first authorized write to a new index creates it.
+
+    ```sh
+    curl --fail http://127.0.0.1:3100/indexes/payments/logs/ingest \
+      -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
+      -H 'Content-Type: application/json' \
+      --data "[{\"time\":$(( $(date +%s) * 1000 )),\"level\":30,\"service\":\"checkout\",\"msg\":\"Order accepted\",\"orderId\":\"demo-1\"}]"
+    ```
+
+    ```json
+    {"accepted":1}
+    ```
+
+    `time` is a Unix timestamp in milliseconds, `level` is a nonnegative integer (30 is Pino's `info`), and `msg` is the message. Other fields, such as `orderId`, become attributes.
+  </Step>
+  <Step title="Search with the CLI">
+    The container already has the read token in its environment and reaches the server at its default address, so run the CLI inside it:
+
+    ```sh
+    docker exec logbrook logbrook query payments --since 1h
+    ```
+
+    Add `--json` to see the complete record, including the `orderId` attribute.
+  </Step>
+  <Step title="Search with curl">
+    The same search over HTTP uses the read token. `from` (inclusive) and `to` (exclusive) are required Unix milliseconds. This asks for the last hour:
+
+    ```sh
+    now=$(( $(date +%s) * 1000 ))
+    curl --fail -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+      "http://127.0.0.1:3100/indexes/payments/logs?from=$(( now - 3600000 ))&to=$(( now + 60000 ))&limit=10"
+    ```
+  </Step>
+  <Step title="Stop and clean up">
+    ```sh
+    docker rm -f logbrook
+    ```
+
+    Without a volume, removing the container deletes the data.
+  </Step>
+</Steps>
+
+<Aside type="note" title="Image tags">
+The `0.1.0` tag is the release version without the Git `v` prefix. See [Releases and container images](/project/releases/) for the tags that exist.
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Run with Docker Compose" description="Keep your data across restarts." href="/get-started/docker-compose/" />
+  <LinkCard title="Send logs over HTTP" description="Batch formats, fields and limits." href="/send-logs/http/" />
+  <LinkCard title="Search and filter" description="Narrow results by level, service and attributes." href="/query/search/" />
+</CardGrid>

@@ -5,4 +5,90 @@ sidebar:
   order: 4
 ---
 
-This page is being written.
+You use `logbrook import` to load historical events from a file straight into a data directory. Unlike HTTP ingestion, an import keeps each event's original time, even when it is older than the retention window. Use it to backfill history or migrate logs you already have on disk.
+
+<Aside type="caution" title="Stop the server first">
+Import opens the data directory itself, so it runs offline. Stop the Logbrook service that owns the data directory before you import. One server process owns a data directory.
+</Aside>
+
+## File format
+
+The file holds events in the same shape as [HTTP ingestion](/send-logs/http/). Each event needs `time` (Unix milliseconds), `level` (integer) and `msg` (string). Other fields follow the same mapping.
+
+| Format | Flag | Contents |
+| --- | --- | --- |
+| JSON | none | One nonempty JSON array of event objects. It must fit within the body limit (1 MiB by default). |
+| NDJSON | `--ndjson` | One event object per line. Blank lines are skipped. The file is streamed in bounded batches. |
+
+For large files, use NDJSON. A JSON file over the body limit fails with `JSON import exceeds body limit; use batched NDJSON`. An NDJSON line longer than the event limit (64 KiB by default) also fails.
+
+## Run an import
+
+<Steps>
+<Step title="Stop the server">
+
+Stop the process or container that uses the data directory.
+
+</Step>
+<Step title="Set retention to cover the history">
+
+Imports keep each event's time, and retention works on event time. Set retention to cover the imported history before you start the server again, or the events expire. See [indexes and retention](/configure/indexes-and-retention/).
+
+</Step>
+<Step title="Import the file">
+
+Use the same config file or environment variables as the server:
+
+```sh
+logbrook --config logbrook.toml --index payments import events.ndjson --source checkout --ndjson
+```
+
+For a JSON array:
+
+```sh
+logbrook --config logbrook.toml --index payments import events.json --source checkout
+```
+
+On success the command prints the number of events committed:
+
+```text
+{"imported":1250}
+```
+
+</Step>
+<Step title="Start the server and check">
+
+Start the server again and count the events:
+
+```sh
+logbrook count payments --since 30d --source checkout
+```
+
+</Step>
+</Steps>
+
+## Options
+
+| Option | Meaning |
+| --- | --- |
+| `<file>` | Path of the JSON or NDJSON file. |
+| `--source <name>` | Required. The `source` stored on every imported event. It replaces the ingestion token's source. |
+| `--ndjson` | Read the file as NDJSON instead of one JSON array. |
+| `--index <name>` | Global option. Destination index, `default` if omitted. The index is created if it doesn't exist. |
+| `--config <file>` | Global option. The server's TOML file. |
+
+The index count still counts against `max_indexes`, and the command fails if the import would exceed it.
+
+## Failures and retries
+
+Each batch commits on its own. If a later batch is invalid or the process stops, earlier batches stay in the index. Rerunning the whole import then stores them a second time, because Logbrook doesn't deduplicate.
+
+For a clean retry, import into a new data directory. The `{"imported":N}` line is printed only after a complete run, so for a failed run use the error message: an over-long NDJSON line reports how many events were already committed.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Send logs over HTTP" href="/send-logs/http/" description="Live ingestion for new events." />
+  <LinkCard title="Indexes and retention" href="/configure/indexes-and-retention/" description="Set retention to cover imported history." />
+  <LinkCard title="Archives and migration" href="/operate/archives-and-migration/" description="Archive and move data offline." />
+</CardGrid>

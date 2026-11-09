@@ -5,4 +5,224 @@ sidebar:
   order: 1
 ---
 
-This page is being written.
+The `logbrook` binary is the server, a set of offline maintenance commands, and an HTTP client for a running server. This page lists every subcommand and flag. Run `logbrook --help` or `logbrook <command> --help` for the same information from the binary.
+
+```text
+logbrook [GLOBAL OPTIONS] <COMMAND>
+```
+
+| Command | Kind | What it does |
+| --- | --- | --- |
+| [`serve`](#serve) | Server | Start the HTTP API and the Forward receiver |
+| [`check-config`](#check-config) | Server | Validate configuration |
+| [`healthcheck`](#healthcheck) | Server | Probe readiness for container health checks |
+| [`indexes`](#indexes) | Client | List, show, create and delete indexes on a running server |
+| [`query`](#query) | Client | Search events on a running server |
+| [`count`](#count) | Client | Count matching events on a running server |
+| [`import`](#import) | Offline | Import Pino JSON or NDJSON into a data directory |
+| [`archive`](#archive) | Offline | Archive events older than a timestamp |
+| [`projection-status`](#projection-status) | Offline | Inspect promoted-attribute coverage |
+
+Client commands talk to a running server over HTTP. They never read server configuration or open the data directory, so you can run them from another machine. They reject `--config`. Offline commands open the data directory directly, so stop the server first.
+
+## Global options
+
+Global options can appear before or after the subcommand.
+
+| Option | Type | Default | Env var | Applies to | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `--config <PATH>` | path | none | none | Server and offline commands | TOML configuration file. Supported `LOGBROOK_*` environment variables override it. Rejected by client commands. |
+| `--index <NAME>` | string | `default` | none | `import`, `archive`, `projection-status` | Index that offline commands operate on. |
+| `--url <URL>` | string | `http://127.0.0.1:3100` | `LOGBROOK_URL` | Client commands | Server base URL. |
+| `--token <TOKEN>` | string | none | `LOGBROOK_TOKEN` | Client commands | Bearer token. Prefer the environment variable so the token stays out of shell history. |
+| `--json` | flag | off | none | Client commands | Print the server's JSON response instead of a table. |
+| `--timeout <SECONDS>` | integer, 1 to 300 | `30` | none | Client commands | Deadline for the whole request, including the response body. |
+| `--version` | flag | | | All | Print the version. |
+| `--help` | flag | | | All | Print help. |
+
+### Logging
+
+Diagnostics are JSON lines on stderr. The default filter is `logbrook=info`. Set `RUST_LOG` to change it. Command results go to stdout. A failing command logs the error and exits with status 1.
+
+## Client connection and credentials
+
+`--url` takes precedence over `LOGBROOK_URL`. The URL must be an absolute HTTP or HTTPS origin with no user information, query string or fragment. It can include a path, for a server mounted below a prefix. HTTPS certificates and hostnames are verified. The client does not follow redirects and does not retry.
+
+The token comes from `--token`, then `LOGBROOK_TOKEN`, then the role-specific variables below, first match wins. Empty values count as unset.
+
+| Command | Variables tried after `LOGBROOK_TOKEN`, in order |
+| --- | --- |
+| `indexes list`, `indexes show` | `LOGBROOK_ADMIN_TOKEN`, `LOGBROOK_READ_TOKEN` |
+| `indexes create` | `LOGBROOK_ADMIN_TOKEN`, `LOGBROOK_INGEST_TOKEN` |
+| `indexes delete` | `LOGBROOK_ADMIN_TOKEN` |
+| `query`, `count` | `LOGBROOK_READ_TOKEN` |
+
+An admin token manages indexes and nothing else. It cannot query. A stray `LOGBROOK_TOKEN` holding the wrong role makes `query` fail with `401`. See [credentials and roles](/configure/credentials/).
+
+The client reads at most 16 MiB of response. Output is a table by default, or the server JSON with `--json`. A server error prints `server returned HTTP <status>: <message>` with your token redacted.
+
+## serve
+
+```sh
+logbrook --config logbrook.toml serve
+```
+
+Starts the HTTP API and the Fluent Forward receiver, and runs until Ctrl-C or SIGTERM. It takes no flags of its own. Settings come from `--config` and `LOGBROOK_*` environment variables. Without `--config`, built-in defaults apply, including binding `127.0.0.1:3100`. See the [configuration file](/configure/configuration-file/).
+
+Server environment variables read at startup:
+
+| Variable | Sets |
+| --- | --- |
+| `LOGBROOK_BIND` | Listen address |
+| `LOGBROOK_DATA_DIR` | Data directory |
+| `LOGBROOK_INGEST_TOKEN`, `LOGBROOK_SOURCE` | One ingestion token and its source name |
+| `LOGBROOK_READ_TOKEN`, `LOGBROOK_READ_SOURCES` | One read token and its allowed sources |
+| `LOGBROOK_ADMIN_TOKEN` | One admin token |
+| `LOGBROOK_RETENTION_DAYS`, `LOGBROOK_RETENTION_MS` | Retention |
+| `LOGBROOK_MAX_SIZE_GB`, `LOGBROOK_MAX_SIZE_BYTES` | Size target |
+| `LOGBROOK_MAX_INDEXES`, `LOGBROOK_INDEXES` | Index count and declared indexes |
+| `LOGBROOK_ARCHIVE_AFTER_MS`, `LOGBROOK_MAINTENANCE_INTERVAL_SECS` | Archiving schedule |
+
+The configuration file page covers each setting, its default and its TOML key.
+
+## check-config
+
+```sh
+logbrook --config logbrook.toml check-config
+```
+
+Validates the configuration and prints `Configuration is valid`. It does not open or change the data directory. Exits with status 1 and an error on stderr when the configuration is invalid.
+
+## healthcheck
+
+```sh
+logbrook healthcheck
+logbrook --config logbrook.toml healthcheck
+```
+
+Connects to the local `/ready` endpoint and exits 0 only when it answers `HTTP/1.1 200`. It needs no credentials and gives up after 3 seconds. The address comes from `bind` in the `--config` file or `LOGBROOK_BIND`, defaulting to `127.0.0.1:3100`. An unspecified address such as `0.0.0.0` is probed on loopback. Container images use this command as their health check.
+
+## indexes
+
+Manage indexes on a running server. Index names are 1 to 63 lowercase ASCII letters, digits, `-` or `_`, starting with a letter or digit.
+
+| Subcommand | Arguments and flags | HTTP route | Credential |
+| --- | --- | --- | --- |
+| `indexes list` | none | `GET /indexes` | Read or admin |
+| `indexes show <NAME>` | index name | `GET /indexes/{name}` | Read or admin |
+| `indexes create <NAME>` | index name | `PUT /indexes/{name}` | Ingestion or admin |
+| `indexes delete <NAME> --yes` | index name, `--yes` (flag, required) | `DELETE /indexes/{name}` | Admin |
+
+```sh
+logbrook indexes create checkout
+logbrook indexes list
+logbrook indexes show checkout --json
+logbrook indexes delete checkout --yes
+```
+
+- `list` and `show` print `NAME`, `SIZE`, `MAX SIZE`, `RETENTION` and `READY`. `show` adds database, WAL, archive, temporary and other sizes. A missing value shows as `-`.
+- `create` is idempotent and takes the server's configured policy. It cannot set retention or a size limit.
+- `delete` permanently removes the index and its data. Without `--yes` it stops before sending any request. `default` and indexes declared in the server configuration cannot be deleted.
+
+## query
+
+Search events in one index. Fetches one page per run.
+
+```text
+logbrook query <NAME> [TIME] [FILTERS] [--limit <N>] [--cursor <CURSOR>]
+```
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `<NAME>` | string | required | Index name |
+| `--since <DURATION>` | integer plus `ms`, `s`, `m`, `h`, `d` or `w` | `1h` | Look back from now. Conflicts with `--from` and `--to`. |
+| `--from <MS>` | integer, 0 or more | none | Inclusive Unix millisecond bound. Requires `--to`. |
+| `--to <MS>` | integer, 1 or more | none | Exclusive Unix millisecond bound. Requires `--from`. Must be greater than `--from`. |
+| `--source <LIST>` | string | none | One source or a comma-separated list |
+| `--service <VALUE>` | string | none | Exact service |
+| `--logger <VALUE>` | string | none | Exact logger |
+| `--host <VALUE>` | string | none | Exact host |
+| `--message <TEXT>` | string | none | Case-sensitive message substring |
+| `--min-level <N>` | integer, 0 or more | none | Minimum level, inclusive |
+| `--filter <JSON>` | JSON string | none | Attribute equality filter. See [attribute filters](/query/attribute-filters/). |
+| `--limit <N>` | integer, 1 to 1,000 | `100` | Page size. A lower server maximum can apply. |
+| `--cursor <CURSOR>` | string | none | Next-page cursor. Requires `--from` (and therefore `--to`). |
+
+Table output shows a `RANGE` row, a `TIME (ms)`, `LEVEL`, `SOURCE`, `SERVICE`, `MESSAGE` header, one row per event, and a `NEXT_CURSOR` row when another page exists. `--json` prints `events` and `next_cursor`. Requires a read token.
+
+## count
+
+Count every matching event in the window.
+
+```text
+logbrook count <NAME> [TIME] [FILTERS]
+```
+
+It takes the same name, time and filter options as `query`: `--since`, `--from`, `--to`, `--source`, `--service`, `--logger`, `--host`, `--message`, `--min-level` and `--filter`. It has no `--limit` or `--cursor`. Output is a bare number, or `{"count":N}` with `--json`. Requires a read token.
+
+<Aside type="note" title="No facets, histogram or tail commands">
+The CLI has no facets, histogram or live tail command, and no export command. Use the [HTTP API](/reference/http-api/) for those, and loop over `query --json` to export. See [pagination and export](/query/pagination-and-export/).
+</Aside>
+
+## import
+
+Imports Pino JSON or NDJSON into a stopped server's data directory.
+
+```text
+logbrook [--config <PATH>] [--index <NAME>] import <FILE> --source <SOURCE> [--ndjson]
+```
+
+| Argument | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `<FILE>` | path | required | File to import |
+| `--source <SOURCE>` | string, required | none | Source name stamped on every event. 1 to 128 ASCII letters, digits, `-`, `_` or `.`. |
+| `--ndjson` | flag | off | Read one event per line. Without it the file is one JSON array, which must fit within the body limit. |
+
+```sh
+logbrook --config logbrook.toml --index payments import events.ndjson --source checkout --ndjson
+```
+
+NDJSON is committed in bounded batches. Each batch commits on its own, so a failure leaves earlier batches stored and rerunning the whole import duplicates them. Prints `{"imported":N}`. See [import log files](/send-logs/import-files/).
+
+## archive
+
+Archives events older than a timestamp into Parquet files, in a stopped data directory.
+
+```text
+logbrook [--config <PATH>] [--index <NAME>] archive --before <MS>
+```
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `--before <MS>` | integer, 0 or more, required | none | Archive events with an event time before this Unix millisecond timestamp |
+
+It repeats until nothing older remains, then prints `{"archived":N}`. See [archives and migration](/operate/archives-and-migration/).
+
+## projection-status
+
+Reports how much of an index is covered by promoted string attributes. Run it with the server stopped.
+
+```sh
+logbrook --config logbrook.toml --index payments projection-status
+```
+
+Prints JSON with `schema_version`, `promoted_string_keys`, `hot_rows`, `hot_covered_rows`, `archived_rows`, `archived_covered_rows` and `legacy_archive_files`. With a non-empty key set configured, this command activates an index that is not yet activated, so take a backup first.
+
+## Running in a container
+
+The production image contains the same binary. Run client commands inside the running Compose service:
+
+```sh
+docker compose exec logbrook logbrook indexes list
+docker compose exec logbrook logbrook query checkout --since 1h
+```
+
+They use the tokens set in the container's environment.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Search and filter" href="/query/search/" description="Use query and count in practice." />
+  <LinkCard title="Credentials and roles" href="/configure/credentials/" description="Which token each command needs." />
+  <LinkCard title="HTTP API guide" href="/reference/http-api/" description="The routes behind the client commands." />
+</CardGrid>

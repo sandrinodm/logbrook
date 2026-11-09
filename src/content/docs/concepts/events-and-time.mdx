@@ -5,4 +5,88 @@ sidebar:
   order: 1
 ---
 
-This page is being written.
+An event is one structured log record. This page explains which fields an event has, why Logbrook keeps two timestamps, and what a successful ingestion response promises.
+
+## What an event contains
+
+You send events as JSON objects. Logbrook reads a fixed set of canonical fields from each object and keeps everything else as attributes. The wire names follow the Pino log format.
+
+| Stored field | Wire name | Required | Meaning |
+| --- | --- | --- | --- |
+| `event_time` | `time` | Yes | Producer time, an integer in Unix milliseconds. |
+| `level` | `level` | Yes | Severity as a nonnegative integer. Logbrook does not name levels; it keeps the producer's numeric scale. |
+| `message` | `msg` | Yes | The text shown for the event. |
+| `service` | `service` | No | The application or component that produced the event. |
+| `logger` | `name` | No | The logger name. |
+| `host` | `hostname` | No | The host that produced the event. |
+| `pid` | `pid` | No | Process ID, a nonnegative integer. |
+| `attributes` | every other key | No | The rest of the object, kept as JSON. |
+
+Logbrook adds two fields when it stores the event.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | A server-assigned identifier, returned as a decimal string. It is unique within an index and grows with ingestion order. |
+| `source` | The source name tied to the ingestion token. Producers cannot set it. See [indexes, services and sources](/concepts/indexes-services-sources/). |
+| `received_at` | When the server received the event, in Unix milliseconds. |
+
+The event ID and the source never come from the payload. A producer that includes a key such as `id` or `source` gets it stored as an ordinary attribute, not as the canonical field.
+
+The [send logs over HTTP](/send-logs/http/) page shows complete payloads.
+
+## Event time and received time
+
+Event time is the timestamp your application put on the event. Received time is when Logbrook accepted it. They differ whenever a producer buffers, retries or replays logs.
+
+Logbrook uses **event time** for:
+
+- search, count, facet and histogram ranges
+- ordering search results, newest first
+- deciding when an event is archived
+- deciding when an event expires
+
+Logbrook uses **received time**, in the form of ingestion order, for [live tail](/concepts/search-and-tail/). A delayed event appears in tail when it arrives, not where its timestamp would put it.
+
+This split is deliberate. Event time is what you want when you ask what happened between 14:00 and 14:05. Ingestion order is what you want when you watch a stream and need every new event exactly once.
+
+### Limits on event time
+
+Live ingestion checks event time against the clock and the retention window:
+
+- An event more than `max_future_skew_ms` ahead of server time is rejected. The default is 5 minutes and the maximum is one day.
+- An event older than the index's retention window is rejected, because it would expire immediately.
+- Event time must fall between the Unix epoch and `9999-12-31T23:59:59.999Z`.
+
+[Offline imports](/send-logs/import-files/) keep historical timestamps. Set retention to cover imported history before you start the server, or the first maintenance pass expires it.
+
+## Accepted batches
+
+You send events in batches. Logbrook validates a batch as a whole: one invalid event rejects the request and stores nothing from it. When a batch passes validation, Logbrook commits it in one storage transaction and then returns a success response containing the number of accepted events:
+
+```json
+{"accepted": 2}
+```
+
+An accepted batch is therefore durable. Logbrook does not answer before the commit.
+
+### Duplicates on retry
+
+The reverse is not true. If a request times out or the connection drops, the batch may or may not have committed. Logbrook has no idempotency keys and no deduplication, so a producer that retries after an unknown outcome can store the same events twice.
+
+Plan for this in your producer:
+
+- Retry only on failures where the outcome is unknown or the request was rejected, and expect occasional duplicates.
+- Treat `429` as a rejection. The server did not store the batch, and the response includes `Retry-After: 1`.
+- Keep batches small enough that a retry is cheap.
+
+The same rule applies to [Fluent Forward](/configure/forward-listener/): the server acknowledges after the commit, and a sender that retries after a lost acknowledgment can store duplicates.
+
+Each request commits in its own transaction and Logbrook does not combine requests, so send events in batches rather than one request per event.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Indexes, services and sources" href="/concepts/indexes-services-sources/" description="Where events are stored and who may write and read them." />
+  <LinkCard title="Send logs over HTTP" href="/send-logs/http/" description="Payloads, headers and batching." />
+  <LinkCard title="Limits and errors" href="/operate/limits-and-errors/" description="Status codes and size limits." />
+</CardGrid>

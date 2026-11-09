@@ -5,4 +5,279 @@ sidebar:
   order: 4
 ---
 
-This page is being written.
+This page is the reference for the `[forward]` section of the Logbrook TOML file. It covers listeners, principals, routes, TLS, limits and the metrics the receiver exports. For a walkthrough, see [Docker and Fluent Forward](/send-logs/docker-forward/).
+
+The Forward receiver is off by default and is configured only in TOML. There are no environment variables for it. HTTP tokens are still required, and Forward clients authenticate as separate principals. Settings apply on restart.
+
+Run `logbrook --config <file> check-config` to validate a file. It rejects unknown keys, overlapping routes, unknown principals, undeclared indexes and limits that contradict each other.
+
+## How the pieces fit
+
+A minimal setup has three parts. All three are required when `enabled = true`.
+
+```toml title="logbrook.toml"
+[indexes.application]
+
+[forward]
+enabled = true
+
+[[forward.listeners]]
+name = "docker-local"
+bind = "127.0.0.1:24224"
+security = "trusted_local"
+principal = "docker-host"
+
+[forward.principals.docker-host]
+source = "docker-host"
+indexes = ["application"]
+
+[[forward.routes]]
+listener = "docker-local"
+tag_prefix = "application."
+index = "application"
+normalizer = "docker"
+json_profile = "json_auto"
+service_from = "tag_suffix"
+host = "application-host"
+```
+
+- A **listener** is a TCP address or Unix socket and decides how clients authenticate.
+- A **principal** is a named identity. It fixes the stored `source` and the indexes the client may write to.
+- A **route** matches a tag on a listener, sends the events to one index and picks how they are normalized.
+
+Nothing in a record can change its source or index. Routes and principals can name only indexes declared under `[indexes.<name>]`, or `default`. Declared indexes are created at startup and can't be deleted through the API. See [indexes and retention](/configure/indexes-and-retention/).
+
+If a listener can't bind or its TLS material can't be loaded, startup fails and the HTTP API doesn't start.
+
+## Top-level settings
+
+These keys sit directly under `[forward]`.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | Bind the listeners. When true you need at least one listener, principal and route. |
+| `listeners` | array of tables | none | Listening endpoints. Up to 64. |
+| `principals` | table of tables | none | Named identities, keyed by name. Up to 1,024. |
+| `routes` | array of tables | none | Tag-to-index routes. Up to 1,024. |
+
+Enabling Forward also requires `storage.queue_capacity` of at least 2.
+
+## Listeners
+
+Each `[[forward.listeners]]` entry sets one endpoint. Set exactly one of `bind` and `unix_path`.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `name` | string | required | Unique name that routes refer to. |
+| `bind` | `ip:port` | none | TCP address to listen on. |
+| `unix_path` | absolute path | none | Unix socket path. Needs `unix_mode`. |
+| `unix_mode` | integer | none | Socket permission bits, for example `384` (0600) or `432` (0660). Must include owner read and write, and can't grant access to others. |
+| `security` | string | `trusted_local` | `trusted_local`, `shared_key` or `mtls`. |
+| `principal` | string | none | Principal for every client of a `trusted_local` or `shared_key` listener. |
+| `trusted_network` | boolean | `false` | Allow `trusted_local` on a non-loopback address. |
+| `allow_peers` | array of IPs | `[]` | Exact peer IP allowlist. Empty allows all peers. Up to 1,024. |
+| `keepalive` | boolean | `true` | Keep connections open between envelopes. When false, a connection closes after its first envelope. |
+| `udp_heartbeat` | boolean | `false` | Answer UDP heartbeats on the same port. |
+| `shared_key` | secret reference | none | Shared key. Only for `shared_key`. |
+| `server_hostname` | string | none | Hostname sent in the handshake. Required for `shared_key`, up to 255 bytes. |
+| `users` | table | `{}` | Per-user credentials. Only for `shared_key`. Up to 1,024. |
+| `tls` | table | none | Certificate and key paths. Required for `mtls`. |
+
+### Unix sockets
+
+A socket's parent directory must be owned by the service user or root and not be world-writable. Logbrook won't bind over an existing path, even a stale socket. Check its owner and remove it yourself. Unix sockets can't use TLS, `mtls` or UDP heartbeats.
+
+### UDP heartbeats
+
+Heartbeats are off by default. If the sender uses them, set `udp_heartbeat = true`. A listener on a non-loopback address also needs `allow_peers`. The heartbeat answers only a single zero byte, at most 10 times per second per listener. Fluentd 1.20.1 defaults to `heartbeat_type transport`. For ACK-based TCP or TLS delivery, `heartbeat_type none` skips the separate probes and relies on the ACK timeout.
+
+## Authentication
+
+| `security` | Clients prove identity with | Principal comes from |
+| --- | --- | --- |
+| `trusted_local` | Nothing | The listener's `principal` |
+| `shared_key` | A shared key, and optionally a user name and password | The listener's `principal`, or the user's `principal` |
+| `mtls` | A TLS client certificate | `tls.client_fingerprints` |
+
+### trusted_local
+
+There is no authentication. A `trusted_local` listener must set `principal`. On a non-loopback address it also needs `trusted_network = true`, because every host that can reach the port can write. Use it for a local Docker daemon on loopback, or for an isolated container network.
+
+### shared_key
+
+```toml title="logbrook.toml"
+[[forward.listeners]]
+name = "secure"
+bind = "127.0.0.1:24225"
+security = "shared_key"
+server_hostname = "logbrook.example"
+shared_key = { env = "FORWARD_SHARED_KEY" }
+principal = "collector"
+```
+
+To require a user name and password as well, add `users`. Each user authenticates as its own principal, so the listener `principal` is then optional.
+
+```toml title="logbrook.toml"
+users = { sender = { principal = "collector", password = { file = "/run/secrets/forward-password" } } }
+```
+
+The shared key doesn't encrypt traffic. Add TLS across untrusted networks.
+
+A secret reference takes exactly one of `file` or `env`. A file is read byte for byte, including a trailing newline. A secret is 1 to 4,096 bytes. User names are at most 128 bytes.
+
+### mtls
+
+`mtls` requires a `tls` table with `client_ca` and `client_fingerprints`. The mapped principal's `indexes` still limit where it can write.
+
+## TLS
+
+```toml title="logbrook.toml"
+tls = { certificate = "/run/secrets/server.pem", private_key = "/run/secrets/server-key.pem" }
+```
+
+| `tls` key | Type | Meaning |
+| --- | --- | --- |
+| `certificate` | path | PEM certificate chain the listener presents. |
+| `private_key` | path | PEM private key for the certificate. |
+| `client_ca` | path | PEM CA bundle that client certificates must chain to. Required for `mtls`. |
+| `client_fingerprints` | table | Maps lowercase SHA-256 fingerprints of client leaf certificates (64 hex characters) to principal names. Required for `mtls`, only valid with it. Up to 1,024. |
+
+The runtime user must be able to read the TLS files.
+
+## Principals
+
+```toml title="logbrook.toml"
+[forward.principals.docker-host]
+source = "docker-host"
+indexes = ["application"]
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `source` | string | The `source` stored on every event this principal sends. |
+| `indexes` | array of strings | Indexes the principal may write to. At least one, up to 64. Each must be `default` or declared under `[indexes.<name>]`. |
+
+## Routes
+
+A route matches the Forward tag of an envelope. Routes on the same listener can't overlap. A tag that matches no route, or a route to an index the principal isn't allowed to write, closes the connection without an ACK.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `listener` | string | required | Name of the listener this route serves. |
+| `tag` | string | none | Match one exact tag. Can't be combined with `tag_prefix`. |
+| `tag_prefix` | string | `""` | Match every tag with this prefix. |
+| `index` | string | required | Destination index. |
+| `normalizer` | string | `generic` | `generic` or `docker`. |
+| `json_profile` | string | `text` | `text`, `pino` or `json_auto`. Used by the `docker` normalizer. |
+| `service` | string | none | Service stored on every event. Takes precedence over `service_from`. |
+| `service_from` | string | none | `tag_suffix` uses the part of the tag after `tag_prefix`. Not allowed with an exact `tag`. |
+| `host` | string | none | Host stored on every event. The host never comes from the peer address. |
+| `default_level` | integer | `30` | Level for events that carry none. Nonnegative. |
+| `message_fields` | array of strings | `["message", "msg"]` | Fields to read the message from, in order. Up to 32. |
+| `compose_service_label` | string | none | Field naming the Compose service of a container log, at the top level or inside a `labels` map. |
+| `application_time_field` | string | none | Record field holding the application's timestamp. Set together with `application_time_format`. |
+| `application_time_format` | string | none | `unix_ms` or `unix_seconds`. |
+
+How these settings shape events is described in [Docker and Fluent Forward](/send-logs/docker-forward/#how-records-become-events).
+
+## Limits and timeouts
+
+All limits are in the `[forward]` table. They don't change the HTTP limits. Sizes are in bytes and timeouts in milliseconds (1 to 3,600,000).
+
+| Key | Default | Allowed | Meaning |
+| --- | --- | --- | --- |
+| `max_connections` | `1024` | 1 to 65,536 | Sessions open at once, across all listeners. |
+| `max_frame_bytes` | 8 MiB | 1 KiB to 64 MiB | Largest encoded frame a client may send. |
+| `max_expanded_bytes` | 32 MiB | `max_frame_bytes` to 256 MiB | Largest payload after decompression. |
+| `max_events_per_frame` | `10000` | 1 to 10,000 | Events accepted from one frame. |
+| `max_event_bytes` | 256 KiB | 1 byte to 1 MiB | Largest encoded event, including its metadata. |
+| `max_message_bytes` | 256 KiB | 1 to `max_event_bytes` | Longest message an event may carry. |
+| `max_normalized_bytes` | 8 MiB | `max_event_bytes` to 64 MiB | Largest normalized output for one envelope. |
+| `max_metadata_depth` | `32` | 1 to 64 | Deepest nesting of arrays, maps and JSON in one frame. |
+| `max_tag_bytes` | 1 KiB | 1 byte to 4 KiB | Longest tag a client may send. |
+| `max_chunk_bytes` | 1 KiB | 1 byte to 4 KiB | Longest acknowledgement chunk token. |
+| `raw_budget_bytes` | 128 MiB | see below | Socket input buffered across all sessions. |
+| `decoded_budget_bytes` | 128 MiB | see below | Decode working memory across all sessions. |
+| `max_cpu_jobs` | `4` | 1 to 256 | Frames decoded at once. |
+| `max_expansion_ratio` | `1000` | at least 1 | Largest expanded-to-compressed ratio a payload may reach. |
+| `max_gzip_members` | `128` | 1 to 1,024 | Gzip members one payload may contain. |
+| `decode_timeout_ms` | `5000` | | Budget for decoding one frame. |
+| `handshake_timeout_ms` | `5000` | | Budget for the shared-key or TLS handshake. |
+| `frame_idle_timeout_ms` | `5000` | | Longest wait for the next byte of a partly received frame. |
+| `frame_total_timeout_ms` | `30000` | at least the idle timeout | Longest total time to receive one frame. |
+| `session_idle_timeout_ms` | `300000` | | Idle time allowed between frames on one session. |
+| `admission_timeout_ms` | `5000` | | Longest wait for writer capacity before a frame is refused. |
+| `ack_write_timeout_ms` | `5000` | | Longest time to write a response or acknowledgement, and to close a connection. |
+| `allow_binary_chunk` | `false` | | Allow `chunk` tokens that aren't strings. They are echoed back byte for byte. |
+| `zero_time_to_receipt` | `true` | | Give an event with a zero timestamp the receipt time and `attributes.forward.zero_time_substituted = true`. When false, the zero timestamp is kept and rejected as outside retention. |
+
+### Memory budgets
+
+Two budgets must cover the largest frame, or startup fails:
+
+- `raw_budget_bytes` must be at least `3 * max_frame_bytes + 1024`, and at most 4 GiB - 1.
+- `decoded_budget_bytes` must be at least `2 * max_expanded_bytes + max_normalized_bytes`, and at most 4 GiB - 1.
+
+Each session decodes one envelope at a time. These budgets cover Forward's own buffers only. When you size a host, add DuckDB memory, TLS state and kernel socket buffers.
+
+The gzip ratio limit can reject valid, very repetitive logs. If it does, raise `max_expansion_ratio` and rely on `max_expanded_bytes`. `max_normalized_bytes` counts the stored form, including JSON escaping, Base64 and typed encoding, so a small MessagePack record can exceed it.
+
+## Writer queue share
+
+Forward shares each index's writer queue with HTTP and can use at most half of it. That is half of `storage.queue_bytes / max_indexes` and half of `storage.queue_capacity`. With the defaults that is 4 MiB and 8 queued requests.
+
+The queued size includes serialized attributes and per-event overhead, so it is larger than the wire size. The default `max_normalized_bytes` of 8 MiB is larger than the share.
+
+- An envelope over its share is always rejected. Reduce the sender's batch size or raise `storage.queue_bytes`.
+- An envelope that finds the share full is overload and can be retried.
+
+## Startup, readiness and shutdown
+
+The HTTP API, including `/ready`, starts only after every Forward listener is bound. The process shuts down if a listener fails later. Overload doesn't affect readiness.
+
+On shutdown, Logbrook stops accepting envelopes, drops incomplete frames without an ACK, and finishes admitted commits and their ACKs within `shutdown_timeout_secs`. The sender may retry anything not ACKed by then.
+
+## Metrics
+
+`/metrics` exports these series with the `logbrook_forward_` prefix. Counters only grow while the process runs and start from zero on restart. See [health, readiness and metrics](/operate/monitoring/).
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `connections_active` | gauge | Open sessions. |
+| `connections_accepted_total` | counter | Accepted connections. |
+| `connections_rejected_total` | counter | Rejected connections. |
+| `envelopes_received_total` | counter | Envelopes read. |
+| `events_received_total` | counter | Events read. |
+| `envelopes_admitted_total` | counter | Envelopes admitted to the writer queue. |
+| `events_admitted_total` | counter | Events admitted. |
+| `events_committed_total` | counter | Events committed to storage. |
+| `empty_envelopes_total` | counter | Empty envelopes, which are valid no-ops. |
+| `ignored_values_total` | counter | Non-array values ignored on a session. |
+| `ack_requested_total` | counter | Envelopes that asked for an ACK. |
+| `ack_sent_total` | counter | ACKs written. |
+| `ack_failed_total` | counter | ACKs that failed to write. |
+| `protocol_rejected_total` | counter | Rejections for protocol errors. |
+| `authentication_rejected_total` | counter | Rejections for failed authentication. |
+| `route_rejected_total` | counter | Rejections for unmatched or forbidden routes. |
+| `overload_total` | counter | Envelopes refused for overload. |
+| `storage_rejected_total` | counter | Envelopes refused by storage. |
+| `raw_bytes` | gauge | Socket input bytes held. |
+| `decoded_bytes` | gauge | Decode working bytes held. |
+| `cpu_jobs` | gauge | Frames being decoded. |
+| `heartbeats_total` | counter | UDP heartbeats answered. |
+| `heartbeat_send_failed_total` | counter | UDP heartbeat replies that failed. |
+| `session_errors_total` | counter | Failed sessions. |
+| `normalization_fallback_total` | counter | Docker records stored through the generic fallback. |
+| `binary_preserved_total` | counter | Events whose record was preserved in the typed MessagePack encoding. |
+| `docker_fragments_total` | counter | Docker partial-message records stored as separate events. |
+| `duration_seconds` | histogram | Time per stage, with a `stage` label: `preparation`, `decode`, `admission`, `commit`, `ack`. |
+
+Closed sessions are logged with the listener name, a reason code, the error message (such as which budget was full) and a diagnostic ID: the first eight, then each power of two. Logs never include records, chunk tokens or credentials.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Docker and Fluent Forward" href="/send-logs/docker-forward/" description="Connect Docker's fluentd driver, Fluentd or Fluent Bit." />
+  <LinkCard title="Credentials and roles" href="/configure/credentials/" description="HTTP tokens, which Forward does not replace." />
+  <LinkCard title="Health, readiness and metrics" href="/operate/monitoring/" description="Scrape the Forward metrics." />
+</CardGrid>

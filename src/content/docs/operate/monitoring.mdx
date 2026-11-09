@@ -5,4 +5,175 @@ sidebar:
   order: 3
 ---
 
-This page is being written.
+Logbrook exposes a liveness endpoint, a readiness endpoint and a Prometheus metrics endpoint on the same port as the API. This page shows how to probe them, what each metric means and which ones are worth alerting on.
+
+## Health and readiness
+
+| Endpoint | Auth | Success | Failure |
+| --- | --- | --- | --- |
+| `GET /health` | None | `200` `{"status":"ok"}` | None: it only shows the process answers |
+| `GET /ready` | None | `200` `{"status":"ready"}` | `503` with an error object |
+| `GET /metrics` | Read token | `200`, Prometheus text | `401`, `403`, `429` |
+
+`/health` is a liveness check. `/ready` returns `503` when any index's storage is unavailable.
+
+Logbrook marks the server unready and shuts it down on integrity failures and broken database connections. Recoverable maintenance failures do not affect readiness: reads and ingestion keep working while maintenance retries with exponential backoff, up to 15 minutes between attempts.
+
+<Aside type="caution" title="Readiness does not check disk space">
+`/ready` does not warn about low disk space. Watch free disk through your container or host monitoring.
+</Aside>
+
+### Container healthcheck
+
+The image runs `logbrook healthcheck` every 30 seconds. It sends `GET /ready` over loopback, needs no credentials, does not open storage, and exits nonzero unless it gets an HTTP 200 within 3 seconds. It reads the bind address from `--config` if given, then `LOGBROOK_BIND`.
+
+```sh
+docker exec logbrook logbrook healthcheck
+```
+
+## Scrape metrics
+
+`/metrics` needs a bearer token from the **read** token set, with access to every source and every index. A source-scoped or index-scoped read token gets `403`. An ingest or admin token gets `401`. The response content type is `text/plain; version=0.0.4`.
+
+```yaml title="prometheus.yml"
+scrape_configs:
+  - job_name: logbrook
+    metrics_path: /metrics
+    scrape_interval: 30s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/logbrook-read-token
+    static_configs:
+      - targets: ["logbrook:3100"]
+```
+
+Only one metrics diagnostics job runs at a time. A scrape that arrives while another is running gets `429`, so avoid several Prometheus servers scraping the same instance at short intervals.
+
+To check by hand:
+
+```sh
+curl -s -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" http://127.0.0.1:3100/metrics
+```
+
+## Process and HTTP metrics
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `logbrook_ingested_events_total` | counter | | Events committed across all indexes since the process started. Resets on restart; deleting an index or expiring events does not lower it. |
+| `logbrook_ingest_rejected_total` | counter | | Rejected ingest requests |
+| `logbrook_ready` | gauge | | 1 when every index's storage is ready, else 0 |
+| `logbrook_http_requests_total` | counter | | HTTP requests |
+| `logbrook_http_errors_total` | counter | | HTTP error responses |
+| `logbrook_http_active_requests` | gauge | | Active HTTP handlers |
+| `logbrook_http_duration_seconds` | histogram | `endpoint`, `le` | Handler latency. Buckets: 0.001, 0.01, 0.1, 0.5, 1, 5 seconds and `+Inf` |
+| `logbrook_http_overload_total` | counter | `cause` | Admission rejections by cause |
+| `logbrook_tail_active_subscribers` | gauge | | Active live-tail subscribers |
+| `logbrook_tail_gaps_total` | counter | | Tail gaps caused by expiry or byte overrun |
+| `logbrook_query_requests_total` | counter | | Query requests |
+| `logbrook_query_errors_total` | counter | | Query error responses |
+| `logbrook_ingest_available_requests` | gauge | | Free HTTP admission permits |
+| `logbrook_decoded_available_bytes` | gauge | | Free decoded memory budget |
+| `logbrook_raw_available_bytes` | gauge | | Free wire body memory budget |
+
+The `cause` label of `logbrook_http_overload_total` takes these values: `request_capacity`, `raw_bytes`, `decoded_bytes`, `storage_queue`, `storage_query`, `tail_subscribers` and `metrics_capacity`.
+
+## Storage metrics
+
+Every storage metric carries an `index` label. Sizes are in bytes.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `logbrook_storage_size_bytes` | gauge | Measured disk footprint of the index |
+| `logbrook_storage_size_target_bytes` | gauge | Configured disk target, or 0 when disabled |
+| `logbrook_storage_size_paused` | gauge | 1 when the index is at its target and ingestion is paused |
+| `logbrook_storage_disk_reserved_bytes` | gauge | Disk reserved for in-flight work |
+| `logbrook_storage_retention_before_ms` | gauge | Stored expiry cutoff, Unix milliseconds |
+| `logbrook_storage_queue_used` | gauge | Occupied writer queue slots |
+| `logbrook_storage_reader_queue_used` | gauge | Occupied reader queue slots |
+| `logbrook_storage_readers_busy` | gauge | Busy reader workers |
+| `logbrook_storage_query_timeouts_total` | counter | Queries that hit the deadline |
+| `logbrook_storage_maintenance_failures_total` | counter | Failed maintenance passes |
+| `logbrook_storage_commit_seconds_sum` | counter | Total time spent committing |
+| `logbrook_storage_commits_total` | counter | Commits |
+| `logbrook_storage_group_requests_total` | counter | Requests in committed groups |
+| `logbrook_storage_group_events_total` | counter | Events in committed groups |
+| `logbrook_storage_group_bytes_total` | counter | Bytes in committed groups |
+| `logbrook_storage_archive_files` | gauge | Parquet archive files |
+| `logbrook_storage_archive_bytes` | gauge | Total size of archive files |
+| `logbrook_storage_deferred_unlinks` | gauge | Archive deletions waiting for running queries to release files |
+| `logbrook_storage_database_bytes` | gauge | Size of `events.duckdb` |
+| `logbrook_storage_wal_bytes` | gauge | Size of the WAL |
+| `logbrook_storage_temp_bytes` | gauge | Size of the temp directory |
+
+### Query progress
+
+DuckDB query progress is exported as four gauges with `index`, `role` (`reader` or `maintenance`) and `worker` labels.
+
+| Metric | Meaning |
+| --- | --- |
+| `logbrook_storage_query_progress_available` | 1 when DuckDB has an estimate, else 0 |
+| `logbrook_storage_query_progress_fraction` | Estimated completed fraction, 0 to 1 |
+| `logbrook_storage_query_progress_rows_processed` | Estimated rows processed |
+| `logbrook_storage_query_progress_rows_total` | Estimated total rows |
+
+When a connection is idle or DuckDB cannot estimate a query, `_available` is 0 and the other three are NaN. The estimates do not affect cancellation or deadlines.
+
+## Forward receiver metrics
+
+These metrics are always present, and stay at zero when the [Forward listener](/configure/forward-listener/) is off. None has labels except the histogram.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `logbrook_forward_connections_active` | gauge | Open sessions |
+| `logbrook_forward_connections_accepted_total` | counter | Accepted connections |
+| `logbrook_forward_connections_rejected_total` | counter | Rejected connections |
+| `logbrook_forward_envelopes_received_total` | counter | Envelopes received |
+| `logbrook_forward_events_received_total` | counter | Events received |
+| `logbrook_forward_envelopes_admitted_total` | counter | Envelopes admitted |
+| `logbrook_forward_events_admitted_total` | counter | Events admitted |
+| `logbrook_forward_events_committed_total` | counter | Events committed |
+| `logbrook_forward_empty_envelopes_total` | counter | Envelopes without events |
+| `logbrook_forward_ignored_values_total` | counter | Ignored values |
+| `logbrook_forward_ack_requested_total` | counter | Acknowledgements requested by clients |
+| `logbrook_forward_ack_sent_total` | counter | Acknowledgements sent |
+| `logbrook_forward_ack_failed_total` | counter | Acknowledgements that failed to send |
+| `logbrook_forward_protocol_rejected_total` | counter | Protocol errors |
+| `logbrook_forward_authentication_rejected_total` | counter | Authentication failures |
+| `logbrook_forward_route_rejected_total` | counter | Events with no matching route |
+| `logbrook_forward_overload_total` | counter | Capacity rejections |
+| `logbrook_forward_storage_rejected_total` | counter | Storage rejections |
+| `logbrook_forward_raw_bytes` | gauge | Raw bytes held |
+| `logbrook_forward_decoded_bytes` | gauge | Decoded bytes held |
+| `logbrook_forward_cpu_jobs` | gauge | CPU jobs running |
+| `logbrook_forward_heartbeats_total` | counter | Heartbeats |
+| `logbrook_forward_heartbeat_send_failed_total` | counter | Heartbeat sends that failed |
+| `logbrook_forward_session_errors_total` | counter | Failed session attempts |
+| `logbrook_forward_normalization_fallback_total` | counter | Frames normalized through the generic fallback after a Docker parse failed |
+| `logbrook_forward_binary_preserved_total` | counter | Events whose binary record encoding was preserved as typed values |
+| `logbrook_forward_docker_fragments_total` | counter | Docker records with partial-message fields, stored as separate events |
+| `logbrook_forward_duration_seconds` | histogram | Time per stage, label `stage`: `decode`, `admission`, `commit`, `ack`, `preparation` |
+
+## What to alert on
+
+These alerts follow from what each metric measures. Pick thresholds from your own baseline.
+
+| Condition | Metric | Why |
+| --- | --- | --- |
+| Server not ready | `logbrook_ready == 0` | An index's storage is unavailable; the server may be shutting down |
+| Index at its disk target | `logbrook_storage_size_paused == 1` | Ingestion returns `507` |
+| Disk filling | `logbrook_storage_size_bytes` against `logbrook_storage_size_target_bytes`, plus host free-disk metrics | The target is not a hard limit, and `/ready` does not check disk |
+| Producers being throttled | `rate(logbrook_http_overload_total[5m])` by `cause` | Clients receive `429` |
+| Writer backlog | `logbrook_storage_queue_used` close to `storage.queue_capacity` | Ingestion is about to return `429` |
+| Maintenance failing | `increase(logbrook_storage_maintenance_failures_total[15m]) > 0` | Retention and archival are not keeping up |
+| Slow queries | `increase(logbrook_storage_query_timeouts_total[5m]) > 0` | Queries are hitting the deadline |
+| Archive deletions stuck | `logbrook_storage_deferred_unlinks` staying above 0 | Long queries are holding archive files |
+| Tail clients losing events | `increase(logbrook_tail_gaps_total[5m]) > 0` | Streams ended with a `gap` |
+| Forward senders failing | `rate(logbrook_forward_authentication_rejected_total[5m])`, `logbrook_forward_storage_rejected_total` | Misconfigured or blocked senders |
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Limits and errors" description="What the overload causes and status codes mean." href="/operate/limits-and-errors/" />
+  <LinkCard title="Run in production" description="Hardening and a deployment checklist." href="/operate/production/" />
+  <LinkCard title="Forward listener" description="Configure the receiver these metrics describe." href="/configure/forward-listener/" />
+</CardGrid>

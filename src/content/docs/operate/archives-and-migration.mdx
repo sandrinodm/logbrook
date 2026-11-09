@@ -5,4 +5,129 @@ sidebar:
   order: 5
 ---
 
-This page is being written.
+This page covers the commands that work on a data directory while the server is stopped: archiving hot events to Parquet, checking promoted string attribute coverage, and moving an older flat data directory to the current layout.
+
+Offline commands read the same configuration as the server (`--config` and the supported `LOGBROOK_*` environment variables) and open storage directly. Stop the server first, because only one process may use a data root at a time. They take `--index <name>`, which defaults to `default`.
+
+<Aside type="note" title="Containers">
+The image has no shell, but offline commands are ordinary subcommands. Run them in a one-off container on the data volume with the server stopped, for example `docker run --rm -v logbrook_logs:/data ghcr.io/sandrinodm/logbrook:0.1.0 archive --before 1791321600000`. The image already sets `LOGBROOK_DATA_DIR=/data`.
+</Aside>
+
+## Archive events offline
+
+The server archives hot events on its own after `archive_after_ms`. To do it by hand, stop the service and run:
+
+```sh
+logbrook --config logbrook.local.toml archive --before 1791321600000
+```
+
+`--before` is an exclusive Unix-millisecond cutoff and must not be negative. The command archives in batches until nothing older than the cutoff remains, then prints the total:
+
+```text
+{"archived":12345}
+```
+
+Archiving does not delete anything. Archived events stay searchable, and they expire with retention like other events.
+
+For a specific index:
+
+```sh
+logbrook --config logbrook.local.toml --index payments archive --before 1791321600000
+```
+
+## Promoted string attributes
+
+If you filter often on a few top-level string attributes, configure up to eight physical columns for them:
+
+```toml title="logbrook.local.toml"
+[storage]
+promoted_string_keys = ["runId", "actorJobId", "videoId"]
+```
+
+`indexes.<name>.promoted_string_keys` overrides the global list for one index. Each key is 1 to 256 UTF-8 bytes, and the keys must be distinct.
+
+What changes:
+
+- Only **string equality** filters on those keys get faster. Numeric and boolean filters and other keys use the JSON path as before.
+- Query results, live tail, authorization and cursors behave the same.
+- Existing hot rows are not covered and keep using JSON filtering. New rows get the columns. Export and compaction backfill older data over time.
+- Archive files above the compaction byte limit, and rows with malformed JSON, stay on the JSON path.
+- Missing, null and non-string values are stored as NULL, which is distinct from uncovered rows.
+
+### Activation is permanent
+
+An index is activated the first time it opens with a non-empty key set, and activation upgrades it to schema version 4. From then on its keys are fixed.
+
+- The same keys in a different order are accepted.
+- Omitting the setting, or setting `[]`, keeps the recorded keys rather than removing them.
+- A different non-empty set is rejected at startup.
+- To change the keys, create a new index and reimport.
+- An empty per-index override stops inheritance of the global list only for an index that is not activated yet.
+
+<Aside type="caution" title="Back up before activating">
+Activation upgrades the index, and there are no downgrade migrations. Take an offline backup first. See [backup, restore and upgrade](/operate/backup-and-upgrade/).
+</Aside>
+
+Promoted archives carry SHA-256 digests, checked at startup and around query and compaction reads. Never modify archive files in place: a mismatch fails the operation and can mark the index unready. The digests catch accidental changes, not someone who can also rewrite the database and its manifest. Hashing adds some CPU cost to writes and archive reads.
+
+### Check coverage
+
+With the server stopped, inspect an index:
+
+```sh
+logbrook --config logbrook.local.toml --index payments projection-status
+```
+
+The command prints one line of JSON with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Schema version of the index (3 or 4) |
+| `promoted_string_keys` | The recorded key set |
+| `hot_rows` | Rows in the hot database |
+| `hot_covered_rows` | Hot rows that have the promoted columns |
+| `archived_rows` | Rows in Parquet archives |
+| `archived_covered_rows` | Archived rows that have the promoted columns |
+| `legacy_archive_files` | Archive files written before schema version 4 |
+
+`projection-status` verifies the archives it reads, uses the normal query deadline, and has no HTTP equivalent. With a non-empty key set configured, it activates an index that is not activated yet, so take a backup first.
+
+## Migrate an older flat data directory
+
+Logbrook refuses to start on the old flat layout, `<data_dir>/events.duckdb`, rather than create an empty `default` index next to it.
+
+<Steps>
+<Step title="Stop the old process and back up">
+Take a complete offline backup of the data directory.
+</Step>
+<Step title="Create the default index directory">
+```sh
+mkdir -p "$DATA_DIR/indexes/default"
+```
+</Step>
+<Step title="Move the files together">
+Move `events.duckdb`, `events.duckdb.wal` if it exists, `archives/` and `temp/` (if present) into `indexes/default/` in one step.
+
+```sh
+cd "$DATA_DIR"
+mv events.duckdb archives indexes/default/
+[ -e temp ] && mv temp indexes/default/
+[ -e events.duckdb.wal ] && mv events.duckdb.wal indexes/default/
+```
+
+Do not change the archive paths stored in the database.
+</Step>
+<Step title="Restart and verify">
+Start with the data root still set to `$DATA_DIR`, then check event counts.
+</Step>
+</Steps>
+
+To roll back, restore the backup together with the previous binary.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Import log files" description="Load Pino JSON or NDJSON into a stopped server." href="/send-logs/import-files/" />
+  <LinkCard title="Archives and retention" description="How hot data, Parquet and expiry fit together." href="/concepts/archives-and-retention/" />
+  <LinkCard title="Backup and upgrade" description="Back up before you activate or upgrade." href="/operate/backup-and-upgrade/" />
+</CardGrid>

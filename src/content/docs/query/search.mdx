@@ -1,8 +1,228 @@
 ---
 title: "Search and filter"
-description: "Search events by time range, service, logger, host, level and message text."
+description: "Search events by time range, source, service, logger, host, level and message text, from the CLI or over HTTP."
 sidebar:
   order: 1
 ---
 
-This page is being written.
+Search returns the newest matching events in a time range. You choose the range, narrow it with filters, and read the result as a table or as JSON. Search covers archived events as well as recent ones.
+
+The examples show the CLI and the HTTP API side by side. They assume an index named `checkout` and a read token.
+
+```sh
+export LOGBROOK_URL=http://127.0.0.1:3100
+export LOGBROOK_READ_TOKEN='<your read token>'
+```
+
+<Aside type="note" title="Read tokens only">
+Only a read token can search. An admin or ingestion token returns `401`. The CLI picks `LOGBROOK_READ_TOKEN` for `query` and `count` unless `--token` or `LOGBROOK_TOKEN` is set, so unset those if they hold another token.
+</Aside>
+
+## Run a search
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+```sh
+logbrook query checkout
+```
+
+With no time options the CLI searches the last hour and returns up to 100 events.
+
+</TabItem>
+<TabItem label="HTTP">
+
+HTTP has no default window. `from` and `to` are required.
+
+```sh
+TO=$(jq -nr 'now * 1000 | floor')
+FROM=$((TO - 3600000))
+
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO"
+```
+
+</TabItem>
+</Tabs>
+
+Results are sorted by descending `event_time`, then descending `id` for ties. You cannot change the order. A search with no matches returns an empty `events` array and a null `next_cursor`.
+
+## Choose a time range
+
+A range is half-open: `from` is inclusive and `to` is exclusive. An event exactly at `to` belongs to the next window.
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+Use `--since` for a window that ends now, or `--from` and `--to` for fixed bounds.
+
+```sh
+# Relative: the last 15 minutes
+logbrook query checkout --since 15m
+
+# Absolute: Unix milliseconds, both bounds together
+logbrook query checkout --from 1791334800000 --to 1791338400000
+```
+
+`--since` takes a positive integer with one of these suffixes:
+
+| Suffix | Unit |
+| --- | --- |
+| `ms` | milliseconds |
+| `s` | seconds |
+| `m` | minutes |
+| `h` | hours |
+| `d` | days |
+| `w` | weeks |
+
+`--since` cannot be combined with `--from` or `--to`. `--from` and `--to` must be given together, and `--from` must be earlier than `--to`.
+
+</TabItem>
+<TabItem label="HTTP">
+
+Send `from` and `to` as integer Unix milliseconds, not seconds. HTTP has no `since` parameter.
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode 'from=1791334800000' \
+  --data-urlencode 'to=1791338400000'
+```
+
+The server requires `0 <= from < to <= 253402300799999`. A range outside those limits returns `400`.
+
+</TabItem>
+</Tabs>
+
+A single query can span at most 31 days by default. Split longer investigations into adjacent windows, or ask the operator to raise `max_query_range_ms`. Events removed by retention are not returned.
+
+To turn a UTC timestamp into milliseconds without platform-specific `date` flags, use `jq`:
+
+```sh
+jq -nr '"2026-10-07T14:00:00Z" | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime * 1000'
+```
+
+## Filter the results
+
+Different filters combine with AND. Only `source` accepts a list.
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+```sh
+logbrook query checkout --service api --min-level 50
+logbrook query checkout --logger http --host api-1
+logbrook query checkout --source production,staging
+logbrook query checkout --message timeout
+```
+
+</TabItem>
+<TabItem label="HTTP">
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'service=api' \
+  --data-urlencode 'min_level=50' \
+  --data-urlencode 'message=timeout'
+```
+
+URL-encode every parameter. `--data-urlencode` with `--get` does it for you.
+
+</TabItem>
+</Tabs>
+
+| Filter | CLI option | HTTP parameter | Matches |
+| --- | --- | --- | --- |
+| Source | `--source` | `source` | One source, or a comma-separated list meaning OR. No spaces around commas. At most 128 sources. |
+| Service | `--service` | `service` | Exact, case-sensitive value |
+| Logger | `--logger` | `logger` | Exact, case-sensitive value |
+| Host | `--host` | `host` | Exact, case-sensitive value |
+| Minimum level | `--min-level` | `min_level` | `level >= n`, for a nonnegative integer `n` |
+| Message | `--message` | `message` | Literal, case-sensitive substring |
+| Attributes | `--filter` | `filter` | Top-level attribute equality. See [attribute filters](/query/attribute-filters/). |
+
+### Source scope
+
+Without a `source` filter, a query searches every source your read token allows. Naming a source outside that list returns `403`. See [credentials and roles](/configure/credentials/).
+
+### Minimum level
+
+`min_level` matches `level >= n`. There is no exact-level or maximum-level filter. Logbrook stores any nonnegative integer level. The examples in these docs use Pino's numbers: `10` trace, `20` debug, `30` info, `40` warn, `50` error, `60` fatal. So `min_level=50` returns errors and fatal events.
+
+### Message text
+
+`message` is a literal substring match and it is case-sensitive. `timeout` does not match `Timeout`. Characters such as `%`, `_`, `*`, `|` and parentheses are ordinary characters, so `timeout|declined` searches for that exact text. A comma in any filter except `source` is also literal.
+
+### Limits
+
+Text filters must fit the configured field byte limit (4 KiB by default). On the HTTP log routes, the path plus query string is limited to 32,768 bytes. HTTP rejects unknown parameters, and parameters the endpoint does not accept, with `400`. Only search accepts `limit` and `cursor`.
+
+## Read the output
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+`query` prints a table by default: the range searched, one row per event, and a `NEXT_CURSOR` row when another page exists. The columns are time in Unix milliseconds, level, source, service and message. Missing values show as `-`.
+
+Add `--json` for the server response, with every attribute:
+
+```sh
+logbrook query checkout --since 1h --service api --json
+```
+
+`count` prints a single number. With `--json` it prints `{"count":N}`.
+
+```sh
+logbrook count checkout --since 7d --source production
+```
+
+</TabItem>
+<TabItem label="HTTP">
+
+Search returns JSON:
+
+```json
+{
+  "events": [{
+    "id": "2", "source": "production",
+    "event_time": 1791453599000, "received_at": 1791453600000,
+    "level": 50, "service": "checkout", "logger": "http",
+    "host": "api-1", "pid": null, "message": "payment timeout",
+    "attributes": {"requestId": "demo-002", "durationMs": 1200}
+  }],
+  "next_cursor": "<opaque continuation>"
+}
+```
+
+Count returns `{"count":N}` for every matching event in the window, whatever the page size.
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/count" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'min_level=50'
+```
+
+</TabItem>
+</Tabs>
+
+Each event has `id` (a string), `source`, `event_time`, `received_at` (both Unix milliseconds), `level`, `service`, `logger`, `host`, `pid`, `message` and `attributes`. Optional fields that were not sent are null. See [events and time](/concepts/events-and-time/).
+
+## Page size
+
+`--limit` and `limit` set the page size: 1 to 1,000, default 100. The server's configured maximum can be lower. To read past the first page, see [pagination and export](/query/pagination-and-export/).
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Attribute filters" href="/query/attribute-filters/" description="Match custom fields such as requestId." />
+  <LinkCard title="Counts, facets and histograms" href="/query/aggregations/" description="Summarize a window instead of reading events." />
+  <LinkCard title="Pagination and export" href="/query/pagination-and-export/" description="Read every page and export NDJSON." />
+</CardGrid>

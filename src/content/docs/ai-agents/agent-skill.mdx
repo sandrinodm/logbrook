@@ -5,4 +5,116 @@ sidebar:
   order: 1
 ---
 
-This page is being written.
+The Logbrook repository ships an agent skill. It gives a coding agent the steps to deploy Logbrook, connect an application to it, and investigate the logs in an index. You will install the skill, then ask your agent to do one of those jobs in plain language.
+
+The skill lives in [`skills/logbrook`](https://github.com/sandrinodm/logbrook/tree/main/skills/logbrook).
+
+## What the skill does
+
+The skill covers three kinds of work. Your agent follows only the path the task needs, so querying an existing server doesn't trigger a new deployment.
+
+| Task | What the agent does | Reference file |
+| --- | --- | --- |
+| Install | Pulls a published image, creates a `.env` with generated tokens, runs Logbrook with Docker or Docker Compose, and sets up storage, retention and indexes. | `references/installation.md` and `assets/compose.yaml` |
+| Connect | Configures an application or collector to send logs: HTTP ingestion, Pino for Node.js, or Docker and collectors over Fluent Forward. | `references/application-logging.md` and `references/forward.md` |
+| Investigate | Searches, counts, groups by facets, builds histograms, compares time windows, exports every page and follows new errors. | `references/queries-and-insights.md` |
+
+Each job has a completion check. An installation is done when the server is ready, storage survives a container restart, and a synthetic event can be ingested and queried. An integration is done when a uniquely identifiable record from the real application reaches the chosen index and queued logs drain on shutdown. An investigation names the index, time bounds, filters, matching counts and supporting events, and separates observed patterns from hypotheses.
+
+<FileTree>
+
+- logbrook
+  - SKILL.md
+  - agents
+    - openai.yaml
+  - assets
+    - compose.yaml
+  - references
+    - application-logging.md
+    - forward.md
+    - installation.md
+    - queries-and-insights.md
+
+</FileTree>
+
+`SKILL.md` has the description that tells an agent when to use the skill, plus a table that points to the right reference. The references ship with the skill, so it works outside a Logbrook checkout. The commands assume Bash or Zsh, Docker with the Compose plugin, `curl` and `jq`. The Pino examples also need Node.js and npm.
+
+## Install the skill
+
+<Tabs syncKey="agent">
+<TabItem label="Claude Code">
+
+Copy the `skills/logbrook` directory into a skills directory. For every project, use your home directory:
+
+```sh
+git clone https://github.com/sandrinodm/logbrook.git
+mkdir -p ~/.claude/skills
+cp -R logbrook/skills/logbrook ~/.claude/skills/
+```
+
+For one project only, copy it into that project instead:
+
+```sh
+mkdir -p .claude/skills
+cp -R /path/to/logbrook/skills/logbrook .claude/skills/
+```
+
+Start a new Claude Code session so it picks up the skill. Claude loads it when a request matches its description, for example when you ask to deploy Logbrook or search logs stored in Logbrook.
+
+</TabItem>
+<TabItem label="Other agents">
+
+The skill is a directory with a `SKILL.md` file and relative links to its references. Copy the whole `skills/logbrook` directory to wherever your agent reads skills, and keep the directory structure. `agents/openai.yaml` holds a display name, a short description and a default prompt for agents that read that file. If your agent has no skill support, add `SKILL.md` and the files it links to as context for the task.
+
+</TabItem>
+</Tabs>
+
+## Example prompts
+
+Give the agent the outcome you want. It asks only for details that change the work, such as the server URL, the index and which credential role the task needs.
+
+**Install**
+
+- "Use the logbrook skill to run Logbrook with Docker Compose in this directory, with a persistent volume."
+- "Set up Logbrook on this machine and verify that a test event survives a container restart."
+
+**Connect**
+
+- "Connect this Node.js service to Logbrook with Pino. Send logs to the `apps` index and flush on shutdown."
+- "Send the logs of my Compose services to Logbrook through Docker's fluentd driver."
+
+**Investigate**
+
+- "In the `apps` index, find the errors from the last hour and tell me which services are affected."
+- "Compare error counts for `checkout` between the last hour and the same hour yesterday."
+- "Export every `payment timeout` event from the last day and group them by request ID."
+
+## Safety rules
+
+The skill tells the agent to work within these limits:
+
+- **Credentials stay out of the conversation.** Tokens live in the environment or a local secret file, never in the chat. Server tokens have roles. Ingestion tokens write, read tokens query, and admin tokens manage indexes but can't read events.
+- **Setup and investigation stay routine.** The agent doesn't combine routine setup or investigation with permanently deleting an index or a volume, or with shortening retention. Deleting data needs its own explicit request.
+- **Investigations read existing events.** Creating a demonstration event is a write, so an investigation-only request uses events that are already stored.
+- **Reuse before replacing.** The agent reuses your existing deployment and configuration, and keeps an existing collector's configuration until a separate migration has verified counts and a rollback path.
+- **No invented guarantees.** The agent doesn't present configured limits as measured capacity, and doesn't claim clustering or exactly-once delivery. A response that was lost can store a batch twice.
+
+Review any command that changes a server before the agent runs it, as you would for any automation that touches your logs.
+
+## Agent-readable documentation
+
+This documentation site is also built for agents to read, so an agent can fetch the exact page it needs without scraping HTML:
+
+- Every page has a Markdown version. Add `index.md` to the page path, for example `/logbrook/send-logs/http/index.md`.
+- `/llms.txt` lists every page with its description. Each section also has its own `llms.txt`.
+- `/llms-full.txt` contains the full text of the documentation in one file.
+
+Point your agent at `/llms.txt` when it needs to find a page, and at a page's `index.md` when it needs the content.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Quickstart" href="/get-started/quickstart/" description="Run Logbrook yourself in a few minutes." />
+  <LinkCard title="Send logs over HTTP" href="/send-logs/http/" description="The ingestion contract your agent follows." />
+  <LinkCard title="Investigation cookbook" href="/query/cookbook/" description="Searches and exports you can ask your agent for." />
+</CardGrid>

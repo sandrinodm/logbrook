@@ -1,8 +1,386 @@
 ---
 title: "Investigation cookbook"
-description: "Step-by-step recipes for investigating incidents, with a demo dataset of known answers."
+description: "Numbered recipes for investigating an incident with the CLI and HTTP API, on a demo dataset with known answers."
 sidebar:
   order: 6
 ---
 
-This page is being written.
+This page walks through an investigation from the first error to an export. Load the demo dataset once, then work through the recipes. Every count in a "Demo" comment is the answer you should see.
+
+## Set up
+
+The recipes need Bash or Zsh, `jq`, a running server and a read token. The HTTP recipes also use `curl`.
+
+```sh
+export LOGBROOK_URL=http://127.0.0.1:3100
+export LOGBROOK_READ_TOKEN='<your configured read token>'
+export QUERY_INDEX=checkout
+
+logbrook indexes list
+```
+
+With Docker Compose, run the CLI inside the container, for example `docker compose exec logbrook logbrook query checkout --since 1h`. If you already have an index with data, you can skip the demo and use your own index.
+
+### Load the demo dataset
+
+The expected results assume a fresh index. You need an ingestion token allowed to create it, a read token allowed to read it and the ingestion token's source, and a free index slot (`max_indexes` defaults to four, including `default`). Running the ingestion twice stores duplicates, so use a new index name each time.
+
+```sh
+export LOGBROOK_INGEST_TOKEN='<your configured ingestion token>'
+export QUERY_INDEX="query-demo-$(date +%s)"
+export QUERY_TO_MS=$(jq -nr 'now * 1000 | floor')
+export QUERY_FROM_MS=$((QUERY_TO_MS - 3600000))
+
+jq -n --argjson until "$QUERY_TO_MS" '
+  # Minutes before the upper bound, severity, service, logger, host, message, attributes.
+  [
+    [50, 30, "api", "http", "api-1", "GET /health 200",
+     {statusCode: 200, durationMs: 8}],
+    [45, 20, "api", "http", "api-1", "cache hit for user usr-7",
+     {userId: "usr-7"}],
+    [40, 40, "api", "http", "api-2", "upstream timeout retry=1",
+     {statusCode: 504, durationMs: 1200}],
+    [35, 50, "api", "http", "api-1", "payment declined order=ord-42",
+     {statusCode: 402, durationMs: 210, orderId: "ord-42"}],
+    [30, 50, "worker", "jobs", "worker-1", "job failed order=ord-42",
+     {jobId: "job-9", orderId: "ord-42"}],
+    [25, 30, "auth", "security", "auth-1", "login succeeded user=usr-7",
+     {userId: "usr-7"}],
+    [20, 50, "api", "http", "api-2", "upstream timeout provider=stripe",
+     {statusCode: 504, durationMs: 5200}],
+    [15, 60, "worker", "jobs", "worker-1", "worker stopped unexpectedly",
+     {jobId: "job-9"}],
+    [10, 40, "api", "http", "api-1", "rate limit 100% reached",
+     {statusCode: 429, durationMs: 2}],
+    [5, 30, "api", "http", "api-2", "GET /orders 200",
+     {statusCode: 200, durationMs: 45}],
+    [2, 50, "api", "http", "api-1", "Timeout talking to inventory",
+     {statusCode: 503, durationMs: 3100}],
+    [1, 30, "api", "http", "api-1", "checkout completed order=ord-43",
+     {statusCode: 200, durationMs: 90, orderId: "ord-43"}]
+  ]
+  | to_entries
+  | map(
+      .key as $number
+      | .value as $row
+      | {
+          time: ($until - $row[0] * 60000),
+          level: $row[1], service: $row[2], name: $row[3],
+          hostname: $row[4], msg: $row[5],
+          requestId: ("req-" + (("00" + (($number + 1) | tostring))[-3:]))
+        } + $row[6]
+    )
+' |
+  curl --fail-with-body --silent --show-error \
+    "${LOGBROOK_URL%/}/indexes/$QUERY_INDEX/logs/ingest" \
+    -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
+    -H 'Content-Type: application/json' \
+    --data-binary @-
+```
+
+Expected response: `{"accepted":12}`. The timestamps run from 50 minutes to one minute before `QUERY_TO_MS`, which fits the default seven-day retention. A retention shorter than 50 minutes rejects the batch.
+
+| Fixture fields | Values |
+| --- | --- |
+| Services | `api` (9 events), `worker` (2), `auth` (1) |
+| Loggers | `http`, `jobs`, `security` |
+| Hosts | `api-1`, `api-2`, `worker-1`, `auth-1` |
+| Levels | 20 (1), 30 (4), 40 (2), 50 (4), 60 (1) |
+| Messages | Two contain lowercase `timeout`; one contains capitalized `Timeout` |
+| Custom attributes | `requestId`, and where applicable `statusCode`, `durationMs`, `orderId`, `userId`, `jobId` |
+
+The fixture sends Pino-style `time`, `msg`, `name` and `hostname`, which search returns as `event_time`, `message`, `logger` and `host`. Other fields go under `attributes`, so `requestId` becomes `attributes.requestId`. The `source` comes from the ingestion token, and the server assigns each event an `id` as a JSON string.
+
+### Define helpers
+
+Comparisons and pagination need fixed `[from, to)` bounds. Keep the demo's `QUERY_FROM_MS` and `QUERY_TO_MS`. For existing data, capture the last hour once with the same two `export` lines. Both are Unix milliseconds, and `from` is inclusive while `to` is exclusive.
+
+```sh
+query_window() {
+  logbrook query "$QUERY_INDEX" \
+    --from "$QUERY_FROM_MS" --to "$QUERY_TO_MS" "$@"
+}
+count_window() {
+  logbrook count "$QUERY_INDEX" \
+    --from "$QUERY_FROM_MS" --to "$QUERY_TO_MS" "$@"
+}
+logs_get() {
+  curl --fail-with-body --silent --show-error --get \
+    "${LOGBROOK_URL%/}/indexes/$QUERY_INDEX/logs$1" \
+    -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+    --data-urlencode "from=$QUERY_FROM_MS" \
+    --data-urlencode "to=$QUERY_TO_MS" "${@:2}"
+}
+
+count_window                  # Demo: 12
+```
+
+## Recipe 1: Read recent events
+
+```sh
+# Last hour, newest first; default page size is 100.
+logbrook query "$QUERY_INDEX"
+
+# Last 15 minutes, up to 20 events.
+logbrook query "$QUERY_INDEX" --since 15m --limit 20
+
+# Complete event objects, including attributes.
+logbrook query "$QUERY_INDEX" --since 1h --json
+```
+
+Results are newest first. `--since` is measured from the moment each command runs, so use the fixed helpers when you need repeatable answers. See [search and filter](/query/search/).
+
+## Recipe 2: Find warnings and errors
+
+```sh
+# Warning and above: demo has 7.
+query_window --min-level 40
+count_window --min-level 40
+
+# Error and above, including fatal: demo has 5.
+count_window --min-level 50 --json    # {"count":5}
+
+# Fatal and above: demo has 1.
+query_window --min-level 60
+```
+
+The examples use Pino's level numbers: 40 warn, 50 error, 60 fatal. `--min-level 50` means `level >= 50`. There is no exact-level filter.
+
+## Recipe 3: Narrow by service, logger, host and source
+
+```sh
+# One service: demo has 9.
+query_window --service api
+
+# API errors and fatal events: demo has 3.
+query_window --service api --min-level 50
+
+# Errors on one API host: demo has 2.
+query_window --service api --logger http --host api-1 --min-level 50
+
+# Background-worker errors: demo has 2, including the fatal event.
+query_window --service worker --logger jobs --min-level 50
+```
+
+Filters combine with AND, and values are exact and case-sensitive: `--service api` does not match `api-worker` or `API`. Only `--source` takes a comma-separated list, meaning OR. The source names depend on your server configuration.
+
+## Recipe 4: Search messages literally
+
+```sh
+# Literal, case-sensitive substring: demo has 2.
+query_window --message timeout
+
+# Capitalized variant: demo has 1.
+query_window --message Timeout
+
+# Correlate an order mentioned by two different services: demo has 2.
+query_window --message ord-42
+
+# Quote spaces and shell punctuation: demo has 1.
+query_window --message 'rate limit 100% reached'
+
+# Combine text with other filters: demo has 1.
+query_window --service api --min-level 50 --message timeout
+```
+
+`--message` is a literal substring. `%`, `_`, `*`, `|` and parentheses are ordinary characters.
+
+## Recipe 5: Count the full window
+
+```sh
+count_window                                 # Demo: 12
+count_window --service api                   # Demo: 9
+count_window --message ord-42                # Demo: 2
+count_window --service api --min-level 50    # Demo: 3
+```
+
+The server counts every matching event in the window, whatever the page size.
+
+## Recipe 6: Look up one request by attribute
+
+```sh
+query_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
+count_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
+```
+
+Both find the one matching demo event (`payment declined order=ord-42`). Strings are case-sensitive, a number never matches a string, and missing or null attributes never match. See [attribute filters](/query/attribute-filters/).
+
+## Recipe 7: Fetch the next page
+
+```sh
+page=$(query_window --limit 3 --json)
+printf '%s\n' "$page" | jq '.events'
+cursor=$(printf '%s\n' "$page" | jq -r '.next_cursor // empty')
+
+if [ -n "$cursor" ]; then
+  query_window --limit 3 --cursor "$cursor" --json
+fi
+```
+
+The first demo page holds `req-012`, `req-011` and `req-010`, and the next holds `req-009`, `req-008` and `req-007`. Stop when `next_cursor` is null. Repeat the same index, bounds, filters and page size on every page, or the server returns `400`. See [pagination and export](/query/pagination-and-export/).
+
+## Recipe 8: Export every page as NDJSON
+
+This writes every page to `query-export.ndjson`, replacing any existing file. If a request fails, the loop exits nonzero and leaves a partial file. Delete it before retrying.
+
+```sh
+(
+  set -eu
+  cursor=''
+  while :; do
+    if [ -n "$cursor" ]; then
+      page=$(query_window --limit 3 --cursor "$cursor" --json)
+    else
+      page=$(query_window --limit 3 --json)
+    fi
+    printf '%s\n' "$page" | jq -c '.events[]'
+    cursor=$(printf '%s\n' "$page" | jq -r '.next_cursor // empty')
+    [ -n "$cursor" ] || break
+  done
+) > query-export.ndjson
+
+wc -l < query-export.ndjson              # Demo: 12
+```
+
+The demo uses three events per page so you can see it paginate. For real exports use a larger page size, up to 1,000 by default.
+
+## Recipe 9: Do what the server cannot
+
+Run these on the complete export from recipe 8, not on a single page.
+
+```sh
+# Exact error level, excluding fatal: demo has 4.
+jq -c 'select(.level == 50)' query-export.ndjson
+
+# Case-insensitive message matching: demo has 3.
+jq -c 'select(.message | test("timeout"; "i"))' query-export.ndjson
+
+# OR across two services: demo has 11.
+jq -c 'select(.service == "api" or .service == "worker")' query-export.ndjson
+
+# Exclude health-check messages: demo has 11.
+jq -c 'select(.message | contains("/health") | not)' query-export.ndjson
+
+# Numeric attribute: demo has 3 events taking at least one second.
+jq -c 'select((.attributes.durationMs // 0) >= 1000)' query-export.ndjson
+
+# JSON projection for another tool.
+jq -c '{id, event_time, service, message, requestId: .attributes.requestId}' query-export.ndjson
+
+# CSV projection, with a header and proper quoting.
+printf '%s\n' 'id,event_time,service,level,message'
+jq -r '[.id, .event_time, .service, .level, .message] | @csv' query-export.ndjson
+```
+
+To group on the client, count slow requests per service:
+
+```sh
+jq -s 'map(select((.attributes.durationMs // 0) >= 1000))
+  | group_by(.service)
+  | map({service: .[0].service, slow_requests: length})' query-export.ndjson
+```
+
+Demo result: `[{"service":"api","slow_requests":3}]`. `jq -s` loads the whole export into memory.
+
+## Recipe 10: Query over HTTP
+
+```sh
+# Service, severity and message together; demo has 1 event.
+logs_get '' --data-urlencode 'service=api' \
+  --data-urlencode 'min_level=50' --data-urlencode 'message=timeout' \
+  --data-urlencode 'limit=20' | jq .
+
+# Literal punctuation is encoded correctly; demo has 1.
+logs_get '' --data-urlencode 'message=rate limit 100% reached' | jq .
+
+# Full-window count; demo has 3.
+logs_get /count --data-urlencode 'service=api' \
+  --data-urlencode 'min_level=50' | jq .
+```
+
+The HTTP parameter is `min_level`, where the CLI option is `--min-level`. There is no `since` over HTTP.
+
+## Recipe 11: Discover services, hosts and levels
+
+The CLI has no `facets` command, so this uses HTTP.
+
+```sh
+logs_get /facets | jq '.services'
+
+# Facets among error and fatal events; demo: api=3, worker=2.
+logs_get /facets --data-urlencode 'min_level=50' | jq '.services'
+
+# Hosts among API events; demo: api-1=6, api-2=3.
+logs_get /facets --data-urlencode 'service=api' | jq '.hosts'
+```
+
+Unfiltered, the demo's service facet is `api` 9, `worker` 2, `auth` 1. See [counts, facets and histograms](/query/aggregations/).
+
+## Recipe 12: Chart event volume
+
+```sh
+# Five-minute buckets over the fixed hour.
+logs_get /histogram --data-urlencode 'interval_ms=300000' | jq .
+
+# Error and fatal volume in one-minute buckets; demo total is 5.
+logs_get /histogram --data-urlencode 'interval_ms=60000' \
+  --data-urlencode 'min_level=50' | jq '.buckets'
+
+# Sum the nonempty buckets; demo: 12.
+logs_get /histogram --data-urlencode 'interval_ms=300000' |
+  jq '[.buckets[].count] | add // 0'
+```
+
+Empty buckets are omitted, so fill them with zeros when charting.
+
+## Recipe 13: Watch new events
+
+Live tail is HTTP only. This command stays open until you press Ctrl-C:
+
+```sh
+curl --fail-with-body --silent --show-error --no-buffer --get \
+  "${LOGBROOK_URL%/}/indexes/$QUERY_INDEX/logs/tail" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode 'service=api' --data-urlencode 'min_level=50'
+```
+
+In another terminal, send an event with the same index and ingestion token:
+
+```sh
+jq -n '[{time: (now * 1000 | floor), level: 50, service: "api", msg: "live timeout demonstration"}]' |
+  curl --fail-with-body --silent --show-error \
+    "${LOGBROOK_URL%/}/indexes/$QUERY_INDEX/logs/ingest" \
+    -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
+    -H 'Content-Type: application/json' --data-binary @-
+```
+
+This adds a thirteenth event. Its time is after the fixed window's `to`, so the expected counts above do not change, though a later `--since` query can include it. For resume and gap handling, see [live tail](/query/live-tail/).
+
+## Clean up
+
+To remove the demo index, run the following with an admin token. This permanently deletes it.
+
+```sh
+logbrook indexes delete "$QUERY_INDEX" --yes
+```
+
+## Common errors
+
+| Symptom | Check |
+| --- | --- |
+| `400` invalid or excessive time range | Use milliseconds, `from < to`, and a window within the configured maximum (31 days by default). |
+| `400` unknown query field | Only search accepts `limit` and `cursor`, and only histogram accepts `interval_ms`. |
+| `401` | Use a read token. An admin or ingestion token cannot query. Check `LOGBROOK_TOKEN` overrides in the CLI. |
+| `403` | The token must allow both the index and every requested source. |
+| `404` | The index must already exist. Reads do not create it. |
+| `413` or CLI 16 MiB error | Narrow the filters or window, or lower the page size. |
+| `429` | The server is at capacity. Wait for `Retry-After` and retry with backoff. The CLI does not retry. |
+| `504` | Narrow the scan. Raising CLI `--timeout` does not raise the server deadline. |
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Search and filter" href="/query/search/" description="Every built-in filter." />
+  <LinkCard title="Limits and errors" href="/operate/limits-and-errors/" description="Status codes and limits." />
+  <LinkCard title="CLI reference" href="/reference/cli/" description="All commands and flags." />
+</CardGrid>

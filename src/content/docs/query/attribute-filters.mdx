@@ -1,8 +1,127 @@
 ---
 title: "Attribute filters"
-description: "Match exact values of top-level structured attributes."
+description: "Match events on custom top-level attributes with exact equality, from the CLI or over HTTP."
 sidebar:
   order: 2
 ---
 
-This page is being written.
+Attribute filters select events by the custom fields your application sends, such as `requestId` or `statusCode`. The only operator is exact equality on a top-level attribute. Anything more is done on an export.
+
+## Where attributes come from
+
+When you ingest an event, `time`, `level`, `msg`, `service`, `name`, `hostname` and `pid` become built-in fields. Every other top-level key lands under `attributes`. A `requestId` sent at the top level of the event becomes `attributes.requestId` and can be filtered.
+
+## Write a filter
+
+A filter is one JSON object with an `attributes` array of conditions:
+
+```json
+{"attributes":[{"key":"runId","op":"eq","value":"run-123"}]}
+```
+
+Each condition has a `key`, an `op` that must be `eq`, and a `value`.
+
+<Tabs syncKey="interface">
+<TabItem label="CLI">
+
+```sh
+logbrook query checkout --since 1h \
+  --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}'
+
+logbrook count checkout --since 1h \
+  --filter '{"attributes":[{"key":"statusCode","op":"eq","value":504}]}'
+```
+
+The CLI validates the JSON before it sends the request.
+
+</TabItem>
+<TabItem label="HTTP">
+
+Pass the JSON in the `filter` parameter, URL-encoded:
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/count" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
+  --data-urlencode 'filter={"attributes":[{"key":"statusCode","op":"eq","value":504}]}'
+```
+
+The same `filter` works on search, count, facets, histogram and tail, and it combines with `min_level`, `service` and the other filters.
+
+</TabItem>
+</Tabs>
+
+## How conditions combine
+
+All conditions must match (AND). The filter applies before pagination and aggregation, so counts, facets and histograms cover only matching events.
+
+```json
+{"attributes":[
+  {"key":"runId","op":"eq","value":"run-123"},
+  {"key":"actorJobId","op":"eq","value":"actor-job-456"}
+]}
+```
+
+There is no OR and no NOT. A condition repeated with the same value counts once. Two different values for the same key are rejected.
+
+## Match types strictly
+
+Values must be a string, a number or a boolean. Types must agree:
+
+| Event attribute | Filter value | Matches |
+| --- | --- | --- |
+| `"123"` (string) | `123` (number) | No |
+| `123` (number) | `"123"` (string) | No |
+| `true` | `1` or `"true"` | No |
+| `true` | `true` | Yes |
+| missing, `null`, array or object | any | No |
+
+Strings are case-sensitive and not Unicode-normalized. Numbers compare by value, so `123`, `123.0` and `1.23e2` are equal, and so are `0` and `-0.0`. Integers within the signed or unsigned 64-bit range compare exactly. Other numbers compare as 64-bit floats. An integer outside the 64-bit range, or a number that is not finite, is rejected.
+
+If different producers send the same attribute with different types, run one filter per type.
+
+## Keys are literal
+
+A key names a property directly under `attributes`. Dots, slashes, tildes, dollar signs and wildcard characters in a key are matched literally. `a.b` looks for a property named `a.b`, not for `b` inside `a`.
+
+Two cases to watch:
+
+- An input `attributes` object stays nested at `attributes.attributes`, so a filter cannot reach its fields.
+- Events received over Fluent Forward keep their application fields under `attributes.application`, which top-level equality cannot reach. See [Docker and Fluent Forward](/send-logs/docker-forward/).
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| Filter document, after URL decoding | 4,096 bytes |
+| Conditions | 16 |
+| Key | 1 to 256 bytes, or the configured field limit if lower |
+| String value | 0 to 1,024 bytes, or the configured field limit if lower |
+| Numeric value | 128 characters |
+
+The encoded filter also counts toward the 32,768-byte request-target limit on HTTP, and a proxy in front of Logbrook may allow less.
+
+Omitting `filter` is the same as `{"attributes":[]}`. These return `400`: empty or malformed JSON, `{}`, unknown or repeated members, a repeated `filter` parameter, and any operator other than `eq`. For example:
+
+```json
+{"error":"filter.attributes[1].op: only eq is supported"}
+```
+
+## What is not supported
+
+The server does not support nested attribute paths, ranges or numeric thresholds, case-insensitive message matching, OR, NOT, regular expressions, grouping by attribute, exact or maximum level filters, SQL, Lucene or KQL, or cross-index queries. The `message` filter is a literal, case-sensitive substring.
+
+For these, export the matching window and filter it on your machine with a tool such as `jq`. See [pagination and export](/query/pagination-and-export/) and recipe 9 in the [cookbook](/query/cookbook/).
+
+<Aside type="tip" title="Faster string lookups">
+An operator can list up to eight string attribute keys as promoted attributes in the configuration. String equality on those keys is faster. Results, tail, authorization and cursors behave the same. See the [glossary](/reference/glossary/).
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Search and filter" href="/query/search/" description="The built-in filters." />
+  <LinkCard title="Pagination and export" href="/query/pagination-and-export/" description="Export a window for client-side filtering." />
+  <LinkCard title="Cookbook" href="/query/cookbook/" description="Attribute filters in an investigation." />
+</CardGrid>

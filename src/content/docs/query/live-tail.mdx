@@ -1,8 +1,94 @@
 ---
 title: "Live tail"
-description: "Stream new events over server-sent events and resume after a disconnect."
+description: "Follow new events over Server-Sent Events, filter the stream, and resume after a disconnect."
 sidebar:
   order: 5
 ---
 
-This page is being written.
+Live tail streams events as they are ingested, over HTTP Server-Sent Events (SSE). The stream is HTTP only. The `logbrook` CLI has no `tail` command, so use `curl` or an SSE client.
+
+## Start a tail
+
+```sh
+curl --fail-with-body --silent --show-error --no-buffer --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/tail" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode 'service=api' --data-urlencode 'min_level=50'
+```
+
+The connection stays open until you interrupt it. Without a resume header, tail starts at the newest committed event and sends only events ingested after that. It does not replay history. Use [search](/query/search/) for history.
+
+Send an event from a second terminal to see frames like these:
+
+```text
+event: log
+id: checkout:v1.<opaque-resume-token>
+data: {"id":"3","source":"production",...}
+
+event: cursor
+id: checkout:v1.<opaque-resume-token>
+data: caught up
+```
+
+| Frame | Meaning |
+| --- | --- |
+| `log` | One event. `data` is the complete event JSON. |
+| `cursor` | The stream has caught up. Its `id` is a resume point even if your filters matched nothing. |
+| `gap` | The stream ended because events cannot be replayed. See below. |
+| `error` | The stream ended because the tail query failed. |
+
+Keepalive comments can appear between frames. Real IDs start with the index name.
+
+## Filter the stream
+
+Tail accepts `source`, `service`, `logger`, `host`, `message`, `min_level` and `filter`, with the same meaning as in [search](/query/search/) and [attribute filters](/query/attribute-filters/). It rejects `from`, `to`, `since`, `limit`, `cursor` and `interval_ms` with `400`. The unprefixed `/logs/tail` route tails the `default` index.
+
+## Ordering
+
+Tail follows ingestion order, not event time. An event that arrives late with an older `event_time` appears after newer ones.
+
+## Resume after a disconnect
+
+Save the SSE `id` of the last `log` or `cursor` frame you processed. Reconnect with it in the `Last-Event-ID` header:
+
+```sh
+export LAST_TAIL_ID='<exact id from the SSE stream>'
+curl --fail-with-body --silent --show-error --no-buffer --get \
+  "$LOGBROOK_URL/indexes/checkout/logs/tail" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  -H "Last-Event-ID: $LAST_TAIL_ID" \
+  --data-urlencode 'service=api' --data-urlencode 'min_level=50'
+```
+
+The server replays matching events still retained after that point, then follows new ones. Rules:
+
+- Use the same index, route style and filters. A resume ID with different filters returns `400` before the stream starts.
+- Send the ID unchanged, with its index prefix.
+- It is not a search `next_cursor` and not the event's own JSON `id`.
+
+The server does not reconnect for you, and neither does `curl`. Store IDs and reconnect in your client.
+
+## Gaps
+
+A `gap` frame ends the stream. It means the resume point has expired under retention, or the next event is larger than the per-subscriber output limit. Resuming again cannot recover expired events. Search the retained history to fill the hole, then start a new tail.
+
+An `error` frame also ends the stream. Reconnect or search the retained history.
+
+A long replay does not cause a gap by itself. If the very first event to replay exceeds the output limit, the request fails with `413` before streaming starts.
+
+## Limits
+
+| Limit | Default |
+| --- | --- |
+| Concurrent tail subscribers | 8 |
+| Output bytes per subscriber | 1 MiB |
+
+Past the subscriber limit, new tails get `429` with `Retry-After: 1`. Tail limits are shared by all indexes.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Search and tail concepts" href="/concepts/search-and-tail/" description="How search and tail differ." />
+  <LinkCard title="Limits and errors" href="/operate/limits-and-errors/" description="Tail limits and status codes." />
+  <LinkCard title="Monitoring" href="/operate/monitoring/" description="Tail and gap metrics." />
+</CardGrid>

@@ -5,4 +5,112 @@ sidebar:
   order: 2
 ---
 
-This page is being written.
+Every limit has a default and can be changed in the configuration file. This page lists them with the setting that controls each one, and explains the error responses a client can see.
+
+Request, body memory, connection and tail limits are shared by all indexes. Most settings are TOML only; the table notes the exceptions. Changes apply on restart.
+
+## Request limits
+
+These limits apply to HTTP ingestion. Settings are top-level TOML keys.
+
+| Limit | Default | Config key | When exceeded |
+| --- | --- | --- | --- |
+| Request body | 1 MiB | `max_body_bytes` (max 16 MiB) | `413` |
+| Single event (wire size) | 64 KiB | `max_event_bytes` | `413` |
+| Events per request | 1,000 | `max_events` (max 10,000) | `413` |
+| Field string, metadata key or metadata string | 4,096 UTF-8 bytes | `max_field_bytes` | `413` |
+| JSON nesting depth | 16 | `max_metadata_depth` (max 64) | `413` |
+| Live event timestamp ahead of server time | 5 minutes | `max_future_skew_ms` (max one day) | `400` |
+| Header receive deadline | 10 seconds | `header_timeout_ms` | The request is not served |
+| Body idle deadline | 5 seconds | `body_idle_timeout_ms` | `504`, nothing admitted |
+| Body total deadline | 30 seconds | `body_total_timeout_ms` (max 300 s) | `504`, nothing admitted |
+
+## Concurrency and memory budgets
+
+| Limit | Default | Config key | When exceeded |
+| --- | --- | --- | --- |
+| Concurrent non-tail HTTP handlers | 16 | `max_inflight_requests` | `429` |
+| Simultaneous TCP connections | 128 | `max_connections` | Connection not served |
+| Raw body admission budget | 16 MiB | `max_inflight_body_bytes` | `429` |
+| Decoded request admission budget | 64 MiB | `max_decoded_bytes` | `429` |
+| Writer queue, per index | 16 messages | `storage.queue_capacity` | `429` |
+| Writer queue bytes (divided across index slots) | 32 MiB | `storage.queue_bytes` | `429` |
+
+The raw and decoded budgets limit memory held by request bodies. They do not cap process memory. A request that stalls mid-body holds only the bytes it has sent.
+
+## Query and tail limits
+
+| Limit | Default | Config key | When exceeded |
+| --- | --- | --- | --- |
+| Search time range | 31 days | `max_query_range_ms` (max 366 days) | `400` |
+| Page size | 1,000 events (default page 100) | `max_page_size` | `400` |
+| Histogram buckets | 2,000 | Fixed | `400` |
+| Attribute filter conditions | 16 | Fixed | `400` |
+| Query deadline | 5 seconds | `storage.query_timeout_ms` (max 300 s) | `504` |
+| Query response bytes | 8 MiB | `storage.max_query_bytes` (max 64 MiB) | `413` |
+| Reader workers, per index | 2 | `storage.reader_threads` | Excess reads can get `429` |
+| Tail subscribers | 8 | `max_tail_subscribers` (max 1,024) | `429` |
+| Tail output bytes, per subscriber | 1 MiB | `max_tail_buffer_bytes` | Stream ends with a `gap` event |
+| Tail fallback poll | 1 second (min 250 ms) | `tail_poll_ms` | Not a client error |
+
+A page can exceed the response byte limit even when `limit` is valid. Lower the page size or narrow the filters.
+
+## Storage limits
+
+| Limit | Default | Config key | When exceeded |
+| --- | --- | --- | --- |
+| Indexes, including `default` | 4 | `max_indexes` (1 to 64), env `LOGBROOK_MAX_INDEXES` | `429` |
+| Retention | 7 days | `retention_days` or `retention_ms`, env `LOGBROOK_RETENTION_DAYS` | Events older than the window get `400` |
+| Disk target, per index | Disabled | `max_size_gb` or `storage.max_size_bytes`, env `LOGBROOK_MAX_SIZE_GB` | `507` on ingestion |
+| DuckDB memory (divided across index slots) | 512 MB | `storage.memory_limit` | DuckDB's own limit; does not cap process RSS |
+| DuckDB temporary disk (divided across index slots) | 2 GB | `storage.temp_limit` | DuckDB's own limit |
+| DuckDB threads per connection | 2 | `storage.duckdb_threads` | Not a client error |
+| Archive batch | 100,000 rows | `storage.archive_batch_rows` | Not a client error |
+| Archive partition | 1 hour | `storage.archive_partition_ms` | Not a client error |
+| Compaction input | 16 files / 128 MiB | `storage.compact_max_files`, `storage.compact_max_bytes` | Not a client error |
+| Maintenance job deadline | 30 seconds | `storage.maintenance_timeout_ms` | Job reported as failed |
+| Graceful shutdown | 30 seconds | `shutdown_timeout_secs` | Forced stop |
+
+Byte targets must be at least 16 MiB. Retention must be longer than the archive age.
+
+<Aside type="caution" title="The disk target is not a hard limit">
+It is a retention target for measured file size. Maintenance deletes the oldest event-time groups once queries release their files. While an index stays at its target, ingestion returns `507`. DuckDB reuses freed blocks but does not shrink its database file. Use a filesystem quota if you need a hard ceiling.
+</Aside>
+
+## Retention on ingestion
+
+Retention works on event time. Live ingestion rejects events older than the retention window or more than `max_future_skew_ms` in the future, and it rechecks the stored expiry cutoff at commit. Offline imports accept historical timestamps, so set retention to cover imported data before you serve it.
+
+Expired events disappear from queries immediately. An archive file is deleted only when every event in it has expired. Raising a limit never brings back expired data.
+
+## Error responses
+
+Errors are JSON objects of the form `{"error":"explanation"}`. The explanation is for people; do not parse it as an error code. The status code is the contract.
+
+| Status | Meaning | What to do |
+| --- | --- | --- |
+| `400` | Invalid payload, unsupported media type, bad parameters, protected index deletion, or an invalid or expired search cursor | Correct the request or start a new search |
+| `401` | Missing or invalid bearer credential, or a credential of the wrong role | Check the token and its role |
+| `403` | Source or index scope denial, non-admin deletion, or `/metrics` with a restricted token | Use a token with the right scope |
+| `404` | Unknown index or endpoint | Check the index name |
+| `413` | Body, event, metadata or response size limit | Shrink the request or the result |
+| `429` | Capacity pressure. Includes `Retry-After: 1` | Retry with bounded backoff |
+| `503` | Storage unavailable, integrity failure, or shutdown | Check `/ready` and the logs |
+| `504` | Body receive deadline or query deadline | Retry; see below |
+| `507` | The index has reached its disk target | Free space or raise the target and restart |
+
+A known route called with an unsupported method can return `405`.
+
+<Aside type="caution" title="Retries can duplicate events">
+Logbrook has no idempotency keys. If a request times out, or the client disconnects, the batch may or may not have committed. A `504` after the body was admitted, or a dropped connection, leaves the outcome uncertain. Retrying a `429` is safe in that nothing was admitted, but retrying an uncertain request can store duplicates.
+</Aside>
+
+A `504` on a query leaves the reader worker busy until DuckDB stops the query. The metric `logbrook_storage_query_timeouts_total` counts them.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Monitoring" description="Metrics for capacity pressure and failures." href="/operate/monitoring/" />
+  <LinkCard title="Configuration file" description="Where each limit is set." href="/configure/configuration-file/" />
+  <LinkCard title="HTTP API reference" description="Per-endpoint status codes." href="/api/" />
+</CardGrid>

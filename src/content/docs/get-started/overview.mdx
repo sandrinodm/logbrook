@@ -5,4 +5,51 @@ sidebar:
   order: 1
 ---
 
-This page is being written.
+Logbrook is a self-hosted log search server for structured application logs. This page explains what it does, how it stores data, and what it does not do.
+
+![Logbrook](../../../assets/logbrook-banner.webp)
+
+<Aside type="caution" title="Pre-release software">
+Logbrook is at version 0.1.0. APIs and storage formats may change before a stable release.
+</Aside>
+
+## What it does
+
+Logbrook is a single Rust executable. It receives JSON logs over HTTP, stores recent events in an embedded DuckDB database, moves older events into local Parquet files, and searches both through its CLI and HTTP API. It runs on one server with one data directory and needs no external database or message queue.
+
+![Web apps, APIs, and workers send logs to Logbrook. Recent logs are stored in DuckDB and archived to Parquet files. The CLI and other apps send queries to Logbrook and receive results from both stores.](../../../assets/logbrook-architecture.webp)
+
+## Main pieces
+
+- **HTTP ingestion.** Applications send Pino-style JSON arrays or NDJSON with an ingestion token. Each token maps to a source. A request succeeds only after the batch is committed. See [Send logs over HTTP](/send-logs/http/).
+- **Named indexes.** Each index has its own retention period and disk-size target. The first authorized write to a new index creates it, up to a configurable limit. See [Indexes, services and sources](/concepts/indexes-services-sources/).
+- **Search.** Filter by time range, source, service, logger, host, minimum level, message substring and exact attribute values. Page through results with a cursor, and get counts, facets and histograms. See [Search and filter](/query/search/).
+- **Live tail.** Follow new events over server-sent events, with replay after a reconnect and a notice when events were missed. See [Live tail](/query/live-tail/).
+- **Parquet archival.** Older events move to local Parquet files and stay searchable together with recent ones. See [Archives and retention](/concepts/archives-and-retention/).
+- **CLI.** The same executable is a client for a running server. See the [CLI reference](/reference/cli/).
+- **Fluent Forward receiver.** Off by default. It accepts logs from Docker's `fluentd` logging driver, Fluentd and Fluent Bit. See [Docker and Fluent Forward](/send-logs/docker-forward/).
+- **Offline import** of Pino JSON or NDJSON files. See [Import log files](/send-logs/import-files/).
+
+## Credentials
+
+Logbrook has three roles, each with its own bearer token: ingestion (write events), read (search and tail), and an optional admin role for managing indexes. The roles must use different values. See [Credentials and roles](/configure/credentials/).
+
+## When it fits
+
+- You run one server, or a small group of services, and want to search structured logs without operating a database cluster or a queue.
+- Your applications can emit JSON, or you can forward their output with Fluent Forward.
+- You want to filter by fields rather than write queries.
+
+## What it does not do
+
+- It is a single node. There is no clustering or replication.
+- It has no query language. Searches use structured filters, not SQL, Lucene or KQL.
+- It serves plain HTTP. Put a TLS-terminating reverse proxy in front of it before exposing it beyond the local machine.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Quickstart" description="Run the container, send an event, and search it." href="/get-started/quickstart/" />
+  <LinkCard title="Run with Docker Compose" description="A persistent deployment." href="/get-started/docker-compose/" />
+  <LinkCard title="Events and time" description="How Logbrook models a log event." href="/concepts/events-and-time/" />
+</CardGrid>
