@@ -1,3 +1,4 @@
+//! Dispatches development commands and drops their fixtures on process interruption.
 use clap::{Parser, Subcommand};
 use logbrook_dev::{Result, container, extended, load, notices, release};
 use std::io::Write;
@@ -18,6 +19,9 @@ enum Commands {
     ExtendedLoad(extended::Options),
     MixedLoad(load::mixed::Args),
     IndexLoad(load::index::Args),
+    ForwardLoad(load::forward::Args),
+    AttributeLoad(load::attributes::Args),
+    AttributeCompare(load::attributes_compare::Args),
     Notices(notices::Args),
     /// Prepare the application version and release metadata without committing or publishing.
     ReleaseVersion(release::Args),
@@ -58,6 +62,9 @@ async fn run_command(command: Commands) -> Result<()> {
         Commands::CheckCli(args) => container::check_cli(args).await,
         Commands::MixedLoad(args) => load::mixed::run(args).await,
         Commands::IndexLoad(args) => load::index::run(args).await,
+        Commands::ForwardLoad(args) => load::forward::run(args).await,
+        Commands::AttributeLoad(args) => load::attributes::run(args).await,
+        Commands::AttributeCompare(args) => load::attributes_compare::run(args).await,
         Commands::ExtendedLoad(args) => extended::run(args).await,
         Commands::Notices(args) => notices::run(args).await,
         Commands::ReleaseVersion(args) => release::run(args),

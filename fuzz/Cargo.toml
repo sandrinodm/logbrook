@@ -1,0 +1,58 @@
+[package]
+name = "logbrook-forward-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Compile the production protocol modules without linking storage/DuckDB.
+# Fuzz-only dependencies never enter the server's dependency graph.
+[dependencies]
+base64 = "0.23.1"
+flate2 = "1"
+libfuzzer-sys = "0.4"
+rmp = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+thiserror = "2"
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[[bin]]
+name = "framing"
+path = "fuzz_targets/framing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "packed_payload"
+path = "fuzz_targets/packed_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "options_timestamps"
+path = "fuzz_targets/options_timestamps.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "docker_normalize"
+path = "fuzz_targets/docker_normalize.rs"
+test = false
+doc = false
+bench = false

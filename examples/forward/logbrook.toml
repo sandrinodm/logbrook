@@ -1,0 +1,27 @@
+# HTTP credentials are provided by compose.yaml environment variables.
+bind = "0.0.0.0:3100"
+
+[indexes.application]
+
+[forward]
+enabled = true
+
+[[forward.listeners]]
+name = "docker"
+bind = "0.0.0.0:24224"
+security = "trusted_local"
+trusted_network = true
+principal = "docker-host"
+
+[forward.principals.docker-host]
+source = "docker-host"
+indexes = ["application"]
+
+[[forward.routes]]
+listener = "docker"
+tag_prefix = "application."
+index = "application"
+normalizer = "docker"
+json_profile = "json_auto"
+service_from = "tag_suffix"
+host = "docker-host"

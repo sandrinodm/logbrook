@@ -1,3 +1,4 @@
+//! Process-level regression tests for durability, limits, retention and shutdown.
 mod support;
 
 use serde_json::{Value, json};
@@ -8,7 +9,6 @@ async fn recovered(fixture: &Fixture, timestamp: i64) -> BTreeMap<String, u64> {
     assert_eq!(fixture.count("default", "process-fixture-").await, 1003);
     let mut seen = BTreeMap::new();
     let mut cursor: Option<String> = None;
-
     // The page bound also makes a broken nonterminating cursor fail promptly.
     for _ in 0..20 {
         let mut url = reqwest::Url::parse(&format!("{}/logs", fixture.base)).unwrap();
@@ -19,6 +19,7 @@ async fn recovered(fixture: &Fixture, timestamp: i64) -> BTreeMap<String, u64> {
         if let Some(cursor) = cursor {
             url.query_pairs_mut().append_pair("cursor", &cursor);
         }
+
         let (status, page) = fixture
             .request(
                 &format!("{}?{}", url.path(), url.query().unwrap()),
@@ -36,6 +37,7 @@ async fn recovered(fixture: &Fixture, timestamp: i64) -> BTreeMap<String, u64> {
                 .is_none()
             );
         }
+
         cursor = page["next_cursor"].as_str().map(String::from);
         if cursor.is_none() {
             let mut values: Vec<_> = seen.values().copied().collect();
@@ -44,6 +46,7 @@ async fn recovered(fixture: &Fixture, timestamp: i64) -> BTreeMap<String, u64> {
             return seen;
         }
     }
+
     panic!("cursor did not terminate");
 }
 
@@ -64,10 +67,21 @@ fn copy_tree(from: &Path, to: &Path) {
 async fn acknowledged_batches_survive_crash_archive_and_relocated_restore() {
     let mut fixture = Fixture::new();
     let timestamp = now();
-    let events: Vec<_> = (0..1003).map(|index| json!({"time": timestamp-index, "level": 30, "msg": format!("process-fixture-{index}"), "fixture": index, "service": "process-check"})).collect();
+    let events: Vec<_> = (0..1003)
+        .map(|index| {
+            json!({
+                "time": timestamp - index,
+                "level": 30,
+                "msg": format!("process-fixture-{index}"),
+                "fixture": index,
+                "service": "process-check",
+            })
+        })
+        .collect();
     fixture.cli(&["check-config"], true, false);
     let input = fixture.root.path().join("seed.json");
     fs::write(&input, serde_json::to_vec(&events[..3]).unwrap()).unwrap();
+
     let output = fixture.cli(
         &["import", input.to_str().unwrap(), "--source", "default"],
         true,
@@ -75,8 +89,11 @@ async fn acknowledged_batches_survive_crash_archive_and_relocated_restore() {
     );
     assert_eq!(
         serde_json::from_str::<Value>(&output).unwrap(),
-        json!({"imported":3})
+        json!({
+            "imported": 3,
+        })
     );
+
     fixture.start().await;
     assert_eq!(
         fixture
@@ -97,16 +114,19 @@ async fn acknowledged_batches_survive_crash_archive_and_relocated_restore() {
         .await;
         assert!(results.iter().all(|status| *status == 200));
     }
+
     assert_eq!(
         fixture
             .ingest("default", json!([events[0], {"time":"invalid"}]))
             .await,
         400
     );
+
     fixture.crash();
     fixture.start().await;
     let before = recovered(&fixture, timestamp).await;
     fixture.stop();
+
     let output = fixture.cli(
         &["archive", "--before", &(timestamp + 10000).to_string()],
         true,
@@ -114,8 +134,11 @@ async fn acknowledged_batches_survive_crash_archive_and_relocated_restore() {
     );
     assert_eq!(
         serde_json::from_str::<Value>(&output).unwrap(),
-        json!({"archived":1003})
+        json!({
+            "archived": 1003,
+        })
     );
+
     let restored = fixture.root.path().join("restored");
     copy_tree(&fixture.data, &restored);
     fixture.env.insert(
@@ -133,6 +156,7 @@ async fn acknowledged_batches_survive_crash_archive_and_relocated_restore() {
             .await,
         200
     );
+
     let (_, page) = fixture
         .request(
             &format!(
@@ -153,6 +177,7 @@ async fn acknowledged_batches_survive_crash_archive_and_relocated_restore() {
                 .max()
                 .unwrap()
     );
+
     fixture.stop();
 }
 
@@ -166,9 +191,19 @@ async fn retention_override_reclaims_archives_and_persists_monotonic_cutoff() {
     )
     .unwrap();
     fixture.config = Some(config);
+
     let timestamp = now();
-    let old = json!({"time":timestamp-600000,"level":30,"msg":"old-retention-fixture"});
-    let recent = json!({"time":timestamp,"level":30,"msg":"recent-retention-fixture"});
+    let old = json!({
+        "time": timestamp - 600000,
+        "level": 30,
+        "msg": "old-retention-fixture",
+    });
+    let recent = json!({
+        "time": timestamp,
+        "level": 30,
+        "msg": "recent-retention-fixture",
+    });
+
     fixture.start().await;
     assert_eq!(fixture.ingest("default", json!([old, recent])).await, 200);
     fixture
@@ -189,6 +224,7 @@ async fn retention_override_reclaims_archives_and_persists_monotonic_cutoff() {
         })
         .await;
     assert_eq!(fixture.count("default", "retention-fixture").await, 1);
+
     fixture
         .wait_metric("logbrook_storage_archive_files", "default", |value| {
             value == 0.0
@@ -199,6 +235,7 @@ async fn retention_override_reclaims_archives_and_persists_monotonic_cutoff() {
         "logbrook_storage_retention_before_ms",
         "default",
     );
+
     assert_eq!(fixture.ingest("default", json!([old])).await, 400);
     assert_eq!(fixture.count("default", "retention-fixture").await, 1);
     fixture.stop();
@@ -227,9 +264,26 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
     for name in ["payments", "payments", "audit"] {
         assert_eq!(fixture.cli_json(&["indexes", "create", name])["name"], name);
     }
+
     let timestamp = now();
     let message = "checkout / ? & café";
-    assert_eq!(fixture.ingest("payments", json!([{"time":timestamp,"level":40,"msg":message,"service":"checkout"},{"time":timestamp+1,"level":30,"msg":"other","service":"worker"}])).await, 200);
+    assert_eq!(
+        fixture
+            .ingest(
+                "payments",
+                json!([{"time":timestamp,
+        "level":40,
+        "msg":message,
+        "service":"checkout"},
+        {"time":timestamp+1,
+        "level":30,
+        "msg":"other",
+        "service":"worker"}])
+            )
+            .await,
+        200
+    );
+
     assert_eq!(
         fixture
             .ingest(
@@ -239,6 +293,7 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
             .await,
         200
     );
+
     let listing = fixture.cli_json(&["indexes", "list"]);
     let info = listing["indexes"]
         .as_array()
@@ -259,6 +314,7 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
             .cli(&["indexes", "list"], true, true)
             .contains("payments")
     );
+
     let from = (timestamp - 1000).to_string();
     let to = (timestamp + 1000).to_string();
     let bounds = ["--from", &from, "--to", &to];
@@ -272,6 +328,7 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
     let page = query(&["query", "payments"], &["--message", message]);
     assert_eq!(page["events"].as_array().unwrap().len(), 1);
     assert_eq!(page["events"][0]["message"], message);
+
     let first = query(&["query", "payments"], &["--limit", "1"]);
     let second = query(
         &["query", "payments"],
@@ -284,6 +341,7 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
     );
     assert_eq!(second["events"].as_array().unwrap().len(), 1);
     assert_ne!(first["events"][0]["id"], second["events"][0]["id"]);
+
     for args in [
         vec!["indexes", "delete", "payments"],
         vec!["--token", READ, "indexes", "delete", "payments", "--yes"],
@@ -294,11 +352,15 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
     ] {
         fixture.cli(&args, false, true);
     }
+
     assert_eq!(query(&["count", "payments"], &[])["count"], 2);
     assert_eq!(
         fixture.cli_json(&["indexes", "delete", "payments", "--yes"]),
-        json!({"deleted":"payments"})
+        json!({
+            "deleted": "payments",
+        })
     );
+
     fixture.cli(&["indexes", "show", "payments"], false, true);
     assert_eq!(query(&["count", "audit"], &[])["count"], 1);
     assert_eq!(
@@ -308,6 +370,7 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
     assert_eq!(query(&["count", "payments"], &[])["count"], 0);
     fixture.cli_json(&["indexes", "delete", "payments", "--yes"]);
     fixture.stop();
+
     fixture.start().await;
     assert!(
         fixture.cli_json(&["indexes", "list"])["indexes"]
@@ -316,12 +379,18 @@ async fn management_cli_preserves_roles_pagination_and_index_lifecycle() {
             .iter()
             .all(|item| item["name"] != "payments")
     );
+
     assert_eq!(fixture.count("audit", "sibling").await, 1);
     fixture.stop();
 }
 
+/// One day, in milliseconds.
 const DAY: i64 = 86_400_000;
+
+/// `max_size_bytes` of the `payments` index before the policy restart: 16 MiB.
 const SMALL_CAP: u64 = 16 * 1024 * 1024;
+
+/// `max_size_bytes` of the `payments` index after the policy restart: 64 MiB.
 const RAISED_CAP: u64 = 64 * 1024 * 1024;
 
 fn write_limits(fixture: &Fixture, cap: u64) {
@@ -366,12 +435,14 @@ async fn payment_visibility(fixture: &Fixture, accepted: &BTreeMap<i64, u64>) ->
         "payments",
     ) as i64;
     assert!(later >= earlier);
+
     let lower: u64 = accepted.range(later..).map(|(_, count)| count).sum();
     let upper: u64 = accepted.range(earlier..).map(|(_, count)| count).sum();
     assert!(
         (lower..=upper).contains(&observed),
         "observed {observed}, expected {lower}..={upper}, cutoffs {earlier}..={later}"
     );
+
     later
 }
 
@@ -386,6 +457,7 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
     ]);
     write_limits(&fixture, SMALL_CAP);
     fixture.start().await;
+
     let initial = fixture.metrics().await;
     for index in ["default", "orders"] {
         assert_eq!(
@@ -393,10 +465,12 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
             20_000_000_000.0
         );
     }
+
     assert_eq!(
         metric(&initial, "logbrook_storage_size_target_bytes", "payments"),
         SMALL_CAP as f64
     );
+
     let (status, names) = fixture.request("/indexes", None, READ).await;
     assert_eq!(status, 200);
     let mut names: Vec<_> = names["indexes"]
@@ -407,20 +481,30 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
         .collect();
     names.sort_unstable();
     assert_eq!(names, ["default", "orders", "payments"]);
+
     let timestamp = now();
-    let five_day =
-        json!({"time":timestamp-5*DAY,"level":30,"msg":"index-limits-fixture default-five-day"});
-    let fifteen_day =
-        json!({"time":timestamp-15*DAY,"level":30,"msg":"index-limits-fixture orders-fifteen-day"});
+    let five_day = json!({
+        "time": timestamp - 5 * DAY,
+        "level": 30,
+        "msg": "index-limits-fixture default-five-day",
+    });
+    let fifteen_day = json!({
+        "time": timestamp - 15 * DAY,
+        "level": 30,
+        "msg": "index-limits-fixture orders-fifteen-day",
+    });
     assert_eq!(fixture.ingest("default", json!([five_day])).await, 200);
     assert_eq!(fixture.ingest("orders", json!([fifteen_day])).await, 200);
+
     for index in ["payments", "default"] {
         assert_eq!(fixture.ingest(index, json!([fifteen_day])).await, 400);
         assert_eq!(fixture.count(index, "orders-fifteen-day").await, 0);
     }
+
     assert_eq!(fixture.count("orders", "default-five-day").await, 0);
     assert_eq!(fixture.count("orders", "orders-fifteen-day").await, 1);
     assert_eq!(fixture.count("default", "default-five-day").await, 1);
+
     let mut accepted = BTreeMap::new();
     let timestamp = now();
     assert_eq!(
@@ -438,29 +522,43 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
     let mut random_state = 0x4d595df4d0f33173_u64;
     for batch in 0..128 {
         let timestamp = now();
-        let events: Vec<_> = (0..64).map(|offset| {
-            // Seeded, varied ASCII keeps this pressure fixture reproducible and hard to compress.
-            let payload: String = (0..2560).map(|_| {
-                random_state ^= random_state << 13;
-                random_state ^= random_state >> 7;
-                random_state ^= random_state << 17;
-                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[(random_state & 63) as usize] as char
-            }).collect();
-            json!({"time":timestamp,"level":30,"msg":format!("index-limits-fixture payment-batch-{batch}-event-{offset}"),"payload":payload})
-        }).collect();
+        let events: Vec<_> = (0..64)
+            .map(|offset| {
+                // Seeded, varied ASCII keeps this pressure fixture reproducible
+                // and hard to compress.
+                let payload: String = (0..2560)
+                    .map(|_| {
+                        random_state ^= random_state << 13;
+                        random_state ^= random_state >> 7;
+                        random_state ^= random_state << 17;
+                        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+                            [(random_state & 63) as usize] as char
+                    })
+                    .collect();
+                json!({
+                    "time": timestamp,
+                    "level": 30,
+                    "msg": format!("index-limits-fixture payment-batch-{batch}-event-{offset}"),
+                    "payload": payload,
+                })
+            })
+            .collect();
         assert!(serde_json::to_vec(&events).unwrap().len() <= 1024 * 1024);
         let status = fixture.ingest("payments", json!(events)).await;
         if status == 507 {
             rejected = Some(events[0]["msg"].as_str().unwrap().to_owned());
             break;
         }
+
         assert_eq!(status, 200);
         *accepted.entry(timestamp).or_default() += 64;
     }
     if rejected.is_none() {
         eprintln!(
-            "size pressure used 32 MiB managed test ballast after 128 payload batches; this checks footprint admission, not sustained capacity"
+            "size pressure used 32 MiB managed test ballast after 128 payload \
+                batches; this checks footprint admission, not sustained capacity"
         );
+
         use std::io::Write;
         // Test-owned ballast explicitly checks measured footprint admission if hot allocation stays small.
         let mut ballast =
@@ -469,12 +567,15 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
         for _ in 0..32 {
             ballast.write_all(&block).unwrap();
         }
+
         ballast.sync_all().unwrap();
+
         fixture
             .wait_metric("logbrook_storage_size_bytes", "payments", |value| {
                 value >= SMALL_CAP as f64
             })
             .await;
+
         let message = "index-limits-fixture payment-rejected";
         assert_eq!(
             fixture
@@ -482,20 +583,34 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
                 .await,
             507
         );
+
         rejected = Some(message.into());
     }
+
     assert_eq!(
         fixture.count("payments", rejected.as_ref().unwrap()).await,
         0
     );
     assert_eq!(fixture.request("/ready", None, READ).await.0, 200);
+
     let before_restart = payment_visibility(&fixture, &accepted).await;
-    assert_eq!(fixture.ingest("orders",json!([{"time":now(),"level":30,"msg":"index-limits-fixture orders-during-pressure"}])).await,200);
+    assert_eq!(
+        fixture
+            .ingest(
+                "orders",
+                json!([{"time":now(),
+        "level":30,
+        "msg":"index-limits-fixture orders-during-pressure"}])
+            )
+            .await,
+        200
+    );
     assert_eq!(fixture.count("orders", "orders-during-pressure").await, 1);
     assert_eq!(fixture.count("payments", "orders-during-pressure").await, 0);
     for index in ["default", "orders"] {
         assert_eq!(fixture.count(index, "payment-").await, 0);
     }
+
     let mut directories: Vec<_> = fs::read_dir(fixture.data.join("indexes"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -505,6 +620,7 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
         directories,
         ["default", "orders", "payments"].map(std::ffi::OsString::from)
     );
+
     let databases: Vec<_> = directories
         .iter()
         .map(|name| {
@@ -516,6 +632,7 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
         })
         .collect();
     assert!(databases.iter().all(|path| path.is_file()));
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -527,6 +644,7 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
         inodes.dedup();
         assert_eq!(inodes.len(), 3);
     }
+
     assert!(!fixture.data.join("events.duckdb").exists());
     fixture.stop();
 
@@ -548,7 +666,19 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
     for index in ["payments", "default"] {
         assert_eq!(fixture.ingest(index, json!([fifteen_day])).await, 400);
     }
-    assert_eq!(fixture.ingest("orders",json!([{"time":now()-15*DAY,"level":30,"msg":"index-limits-fixture orders-restart-history"}])).await,200);
+
+    assert_eq!(
+        fixture
+            .ingest(
+                "orders",
+                json!([{"time":now()-15*DAY,
+        "level":30,
+        "msg":"index-limits-fixture orders-restart-history"}])
+            )
+            .await,
+        200
+    );
+
     let timestamp = now();
     assert_eq!(
         fixture
@@ -559,6 +689,7 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
             .await,
         200
     );
+
     *accepted.entry(timestamp).or_default() += 1;
     assert_eq!(fixture.count("payments", "payment-resumed").await, 1);
     payment_visibility(&fixture, &accepted).await;
@@ -578,7 +709,218 @@ async fn named_index_limits_isolate_pressure_and_resume_after_policy_restart() {
     for message in ["orders-fifteen-day", "orders-restart-history"] {
         assert_eq!(fixture.count("orders", message).await, 1);
     }
+
     assert_eq!(fixture.ingest("payments", json!([fifteen_day])).await, 400);
     payment_visibility(&fixture, &accepted).await;
+    fixture.stop();
+}
+
+async fn attribute_sse_frame(
+    response: &mut reqwest::Response,
+    pending: &mut Vec<u8>,
+) -> (String, String, String) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(end) = pending.windows(2).position(|bytes| bytes == b"\n\n") {
+                let frame: Vec<_> = pending.drain(..end + 2).collect();
+                let frame = std::str::from_utf8(&frame).unwrap();
+                let field = |name: &str| {
+                    frame
+                        .lines()
+                        .find_map(|line| line.strip_prefix(name))
+                        .unwrap_or("")
+                        .to_owned()
+                };
+                let event = field("event: ");
+                if !event.is_empty() {
+                    return (event, field("id: "), field("data: "));
+                }
+            } else {
+                let chunk = response
+                    .chunk()
+                    .await
+                    .unwrap()
+                    .expect("SSE ended before expected frame");
+                pending.extend_from_slice(&chunk);
+                assert!(pending.len() < 64 * 1024, "unbounded SSE fixture frame");
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for filtered SSE frame")
+}
+
+#[tokio::test]
+async fn attribute_filter_cli_and_tail_resume_work_over_real_http() {
+    let mut fixture = Fixture::new();
+    fixture.start().await;
+    let timestamp = now();
+    let key = "a/~b.雪";
+    let value = "run +/&?=💡";
+    let filter = json!({
+        "attributes": [{"key":key,"op":"eq","value":value}],
+    })
+    .to_string();
+    let entry = |message: &str, matches: bool| {
+        let mut event = json!({
+            "time": timestamp,
+            "level": 50,
+            "msg": message,
+            "name": "fixture-logger",
+        });
+        event[key] = json!(if matches { value } else { "other" });
+        event
+    };
+    assert_eq!(
+        fixture
+            .ingest(
+                "default",
+                json!([
+                    entry("first-match", true),
+                    entry("not-selected", false),
+                    entry("second-match", true),
+                ])
+            )
+            .await,
+        200
+    );
+
+    let from = (timestamp - 1000).to_string();
+    let to = (timestamp + 60000).to_string();
+    let first = fixture.cli_json(&[
+        "query", "default", "--from", &from, "--to", &to, "--filter", &filter, "--limit", "1",
+    ]);
+    assert_eq!(first["events"][0]["message"], "second-match");
+
+    let cursor = first["next_cursor"].as_str().unwrap();
+    assert!(cursor.starts_with("default:v1."));
+    let second = fixture.cli_json(&[
+        "query", "default", "--from", &from, "--to", &to, "--filter", &filter, "--limit", "1",
+        "--cursor", cursor,
+    ]);
+    assert_eq!(second["events"][0]["message"], "first-match");
+    assert!(second["next_cursor"].is_null());
+
+    let count = fixture.cli_json(&[
+        "count", "default", "--from", &from, "--to", &to, "--filter", &filter,
+    ]);
+    assert_eq!(count["count"], 2);
+
+    let client = reqwest::Client::new();
+    let mut url =
+        reqwest::Url::parse(&format!("{}/indexes/default/logs/tail", fixture.base)).unwrap();
+    url.query_pairs_mut().append_pair("filter", &filter);
+
+    let mut response = client
+        .get(url.clone())
+        .bearer_auth(READ)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
+
+    let mut pending = Vec::new();
+    // Observing this checkpoint establishes subscription readiness without sleeps.
+    let (kind, checkpoint, _) = attribute_sse_frame(&mut response, &mut pending).await;
+    assert_eq!(kind, "cursor");
+    assert!(checkpoint.starts_with("default:v1."));
+
+    assert_eq!(
+        fixture
+            .ingest(
+                "default",
+                json!([entry("new-match", true), entry("new-nonmatch", false)])
+            )
+            .await,
+        200
+    );
+
+    let delivered = loop {
+        let frame = attribute_sse_frame(&mut response, &mut pending).await;
+        if frame.0 == "log" {
+            break frame;
+        }
+        assert_eq!(frame.0, "cursor");
+    };
+    let event: Value = serde_json::from_str(&delivered.2).unwrap();
+    assert_eq!(event["message"], "new-match");
+    assert_ne!(delivered.1, event["id"].as_str().unwrap());
+    drop(response);
+
+    assert_eq!(
+        fixture
+            .ingest(
+                "default",
+                json!([
+                    entry("while-disconnected", true),
+                    entry("still-not-selected", false)
+                ])
+            )
+            .await,
+        200
+    );
+
+    let mut response = client
+        .get(url.clone())
+        .bearer_auth(READ)
+        .header("Last-Event-ID", &delivered.1)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    pending.clear();
+    let resumed = attribute_sse_frame(&mut response, &mut pending).await;
+    assert_eq!(resumed.0, "log");
+    assert_eq!(
+        serde_json::from_str::<Value>(&resumed.2).unwrap()["message"],
+        "while-disconnected"
+    );
+
+    let checkpoint = attribute_sse_frame(&mut response, &mut pending).await;
+    assert_eq!(checkpoint.0, "cursor");
+    drop(response);
+    let changed = json!({
+        "attributes": [{"key":key,"op":"eq","value":"changed"}],
+    })
+    .to_string();
+
+    url.set_query(None);
+    url.query_pairs_mut().append_pair("filter", &changed);
+
+    let response = client
+        .get(url)
+        .bearer_auth(READ)
+        .header("Last-Event-ID", checkpoint.1)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["error"],
+        "cursor does not match query"
+    );
+
+    // This is a real HTTP request: the application must enforce its target limit
+    // before attempting endpoint extraction, including queries without a filter.
+    let oversized = format!("{}/logs?message={}", fixture.base, "x".repeat(32_768));
+    let response = client
+        .get(oversized)
+        .bearer_auth(READ)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["error"],
+        "request target exceeds 32768 bytes"
+    );
+
     fixture.stop();
 }

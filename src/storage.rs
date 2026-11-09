@@ -1,40 +1,67 @@
 //! Dedicated connection owners. Acknowledgements follow explicit appender flush and commit.
+
+#[cfg(test)]
+use crate::model::Event;
 use crate::{
     config::StorageConfig,
-    model::{
-        Error, ErrorKind, Event, FacetValue, Facets, HistogramBucket, NormalizedEvent, Query,
-        SearchResult,
-    },
+    model::{Error, ErrorKind, Facets, HistogramBucket, NormalizedEvent, Query, SearchResult},
 };
-use duckdb::{Connection, params, params_from_iter, types::Value};
+use duckdb::{Connection, ProgressHandle};
+#[cfg(test)]
+use duckdb::{params, params_from_iter, types::Value};
+#[cfg(test)]
+use maintenance::WriterScope;
 use std::{
-    path::Path,
+    fs::create_dir_all,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
-use tokio::sync::{Semaphore, mpsc, oneshot, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 
+mod admission;
 mod archive;
+mod interrupt;
 mod leases;
+mod maintenance;
+mod projection;
+mod projection_integrity;
 mod query;
 mod quota;
+mod readers;
+mod writer;
+
+pub(crate) use admission::{AppendLane, IngressAdmission, serialized_length};
+
+use admission::{AppendOptions, forward_byte_share};
+use archive::{migrate, recover};
+use interrupt::build_maintenance_interrupt;
+use leases::ArchiveLeases;
+#[cfg(test)]
+use leases::cleanup_archives;
+use maintenance::{Maintainer, Maintenance, MaintenanceBudget, spawn_maintenance_side};
+use quota::DiskBudget;
+use readers::{Answer, Operation, Read, ReaderShared, spawn_reader_side};
+use writer::{RETENTION_CUTOFF_SQL, Write, Writer, spawn_writer_side};
 
 #[cfg(test)]
-use archive::export;
-use archive::{ArchiveWork, compact_export, expired_id, export_bounded, migrate, recover};
+use archive::{ArchiveWork, compact_export, export, export_bounded, publish, retain};
 #[cfg(test)]
-use archive::{publish, retain};
-use leases::{ArchiveLeases, cleanup_archives};
-use query::{QueryDeadline, ResultBudget, dataset, run_query};
-use quota::DiskBudget;
+use interrupt::ConnectionOwner;
+#[cfg(test)]
+use maintenance::{maintenance_outcome, maintenance_reply, maintenance_send};
+#[cfg(test)]
+use query::dataset;
+#[cfg(test)]
+use writer::append;
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn db_error(e: impl std::fmt::Display + std::any::Any) -> Error {
+fn db_error(e: impl std::error::Error + Send + Sync + 'static) -> Error {
     let message = e.to_string();
 
     if let Some(error) = (&e as &dyn std::any::Any).downcast_ref::<duckdb::Error>()
@@ -46,18 +73,17 @@ fn db_error(e: impl std::fmt::Display + std::any::Any) -> Error {
                 | duckdb::Error::UnsignedIntegralValueOutOfRange(..)
         )
     {
-        return Error::new(ErrorKind::Integrity, message);
+        return Error::new(ErrorKind::Integrity, message).with_source(e);
     }
 
     if let Ok(details) = serde_json::from_str::<serde_json::Value>(&message) {
         let kind = details.get("exception_type").and_then(|v| v.as_str());
-
         if matches!(kind, Some("Fatal" | "Internal" | "Serialization")) {
-            return Error::new(ErrorKind::Integrity, message);
+            return Error::new(ErrorKind::Integrity, message).with_source(e);
         }
     }
 
-    Error::unavailable(message)
+    Error::unavailable(message).with_source(e)
 }
 
 fn queue_error<T>(error: mpsc::error::TrySendError<T>) -> Error {
@@ -69,6 +95,7 @@ fn queue_error<T>(error: mpsc::error::TrySendError<T>) -> Error {
     }
 }
 
+/// A cloneable handle to bounded ingestion, read, and maintenance workers.
 #[derive(Clone)]
 pub struct Storage {
     inner: Arc<Inner>,
@@ -77,26 +104,144 @@ pub struct Storage {
 /// A fresh file-byte snapshot, including unpublished and unmanaged files.
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 pub struct DiskUsage {
+    /// Total bytes across all files in the index directory.
     pub size_bytes: u64,
+    /// Bytes occupied by the primary `DuckDB` file.
     pub database_bytes: u64,
+    /// Bytes occupied by the write-ahead log.
     pub wal_bytes: u64,
+    /// Bytes occupied by archive files, including unpublished output.
     pub archive_bytes: u64,
+    /// Bytes occupied by temporary files and engine spill files.
     pub temp_bytes: u64,
+    /// Bytes occupied by files outside the managed storage categories.
     pub other_bytes: u64,
 }
 
+/// Observed durable layout and actual row coverage, for offline qualification.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ProjectionStatus {
+    /// Durable hot-table schema version.
+    pub schema_version: i32,
+    /// Canonical attribute keys stored in typed string columns.
+    pub promoted_string_keys: Vec<String>,
+    /// Visible rows in the hot table.
+    pub hot_rows: u64,
+    /// Visible hot rows with validated promoted columns.
+    pub hot_covered_rows: u64,
+    /// Visible rows stored in archive files.
+    pub archived_rows: u64,
+    /// Visible archived rows with validated promoted columns.
+    pub archived_covered_rows: u64,
+    /// Archive files that predate promoted columns.
+    pub legacy_archive_files: u64,
+}
+
+/// Enables native estimates without `DuckDB`'s terminal progress output.
+fn track_query_progress(connection: &Connection) -> Result<ProgressHandle> {
+    connection
+        .set_query_progress_tracking(true)
+        .map_err(db_error)?;
+    Ok(connection.progress_handle())
+}
+
+/// Emits per-connection gauges. `NaN` means unavailable, including idle/closed
+/// connections and plans DuckDB cannot estimate; it must never mean 0% complete.
+fn push_query_progress(
+    output: &mut String,
+    readers: &[ProgressHandle],
+    maintenance: &ProgressHandle,
+) {
+    for (name, help) in [
+        (
+            "available",
+            "Whether DuckDB reports an estimate for the current query.",
+        ),
+        (
+            "fraction",
+            "Estimated completed fraction of the current query, or NaN if unavailable.",
+        ),
+        (
+            "rows_processed",
+            "Estimated rows processed by the current query, or NaN if unavailable.",
+        ),
+        (
+            "rows_total",
+            "Estimated total rows of the current query, or NaN if unavailable.",
+        ),
+    ] {
+        output.push_str(&format!(
+            "# HELP logbrook_storage_query_progress_{name} {help}\n\
+             # TYPE logbrook_storage_query_progress_{name} gauge\n"
+        ));
+    }
+
+    for (role, worker, handle) in readers
+        .iter()
+        .enumerate()
+        .map(|(worker, handle)| ("reader", worker, handle))
+        .chain(std::iter::once(("maintenance", 0, maintenance)))
+    {
+        let snapshot = handle.query_progress();
+        let percentage = snapshot.percentage();
+        let available = u8::from(percentage.is_some());
+        let fraction = percentage.map_or(f64::NAN, |value| value / PERCENTAGE_SCALE);
+        let rows = percentage.map_or(f64::NAN, |_| snapshot.rows_processed() as f64);
+        let total = percentage.map_or(f64::NAN, |_| snapshot.total_rows_to_process() as f64);
+        for (name, value) in [
+            ("available", f64::from(available)),
+            ("fraction", fraction),
+            ("rows_processed", rows),
+            ("rows_total", total),
+        ] {
+            output.push_str(&format!(
+                "logbrook_storage_query_progress_{name}\
+                 {{role=\"{role}\",worker=\"{worker}\"}} {value}\n"
+            ));
+        }
+    }
+}
+
+/// Adds metric descriptions and types to the fixed storage samples.
+fn describe_metric_samples(samples: &str) -> String {
+    samples
+        .lines()
+        .map(|line| {
+            let name = line.split_whitespace().next().unwrap();
+            let kind = if name.ends_with("_total") || name.ends_with("_seconds_sum") {
+                "counter"
+            } else {
+                "gauge"
+            };
+            format!(
+                "# HELP {name} Storage {}.\n# TYPE {name} {kind}\n{line}\n",
+                name.trim_start_matches("logbrook_storage_")
+                    .replace('_', " ")
+            )
+        })
+        .collect()
+}
+
 struct Inner {
+    projection: Option<projection::ProjectionLayout>,
     writer: mpsc::Sender<Write>,
     maintenance: mpsc::Sender<Maintenance>,
     readers: Vec<mpsc::Sender<Read>>,
     interrupts: Vec<Arc<dyn Fn(u64) + Send + Sync>>,
+    query_progress: Vec<ProgressHandle>,
+    maintenance_progress: ProgressHandle,
     next: AtomicU64,
     committed: Arc<AtomicU64>,
     ready: Arc<AtomicBool>,
+    admission: Arc<IngressAdmission>,
+    accepting: Mutex<bool>,
     bytes: Arc<Semaphore>,
+    max_queue_bytes: usize,
+    forward_bytes: Arc<Semaphore>,
+    forward_slots: Arc<Semaphore>,
     timeout: Duration,
     commits: watch::Sender<u64>,
-    data_dir: std::path::PathBuf,
+    data_dir: PathBuf,
     max_result_bytes: usize,
     metrics: Arc<Metrics>,
     archive_leases: Arc<Mutex<ArchiveLeases>>,
@@ -107,11 +252,6 @@ struct Inner {
     shutdown: Arc<tokio::sync::Mutex<Option<Result<()>>>>,
 }
 
-struct QueuedEvent {
-    event: NormalizedEvent,
-    attributes: String,
-}
-
 #[derive(Default)]
 struct Metrics {
     retention_before_ms: AtomicI64,
@@ -120,89 +260,44 @@ struct Metrics {
     maintenance_failures: AtomicU64,
     commit_ns: AtomicU64,
     commits: AtomicU64,
+    group_requests: AtomicU64,
+    group_events: AtomicU64,
+    group_bytes: AtomicU64,
 }
 
-struct Published {
-    path: String,
-    min: i64,
-    max: i64,
-    count: i64,
-    before: i64,
-    high: i64,
-    artifact: archive::ArtifactGuard,
-    reservation: Option<quota::Reservation>,
-    replaced: Vec<String>,
-    min_id: i64,
-    bytes: u64,
-    lower: i64,
-}
-
-enum Maintenance {
-    Archive(i64, oneshot::Sender<Result<usize>>),
-    Compact(oneshot::Sender<Result<usize>>),
-    EnforceSize(oneshot::Sender<Result<usize>>),
-    Retain(i64, oneshot::Sender<Result<usize>>),
-    Stop(oneshot::Sender<()>),
-}
-
-#[cfg(test)]
-type WriterTest = Box<dyn FnOnce(&mut Connection, &Arc<Mutex<Option<MaintenanceBudget>>>) + Send>;
-
-enum Write {
-    #[cfg(test)]
-    Test(WriterTest),
-    Append(
-        String,
-        Vec<QueuedEvent>,
-        oneshot::Sender<Result<usize>>,
-        tokio::sync::OwnedSemaphorePermit,
-        Option<tokio::sync::OwnedSemaphorePermit>,
-    ),
-    Publish(Published, MaintenanceBudget, oneshot::Sender<Result<usize>>),
-    Retain(i64, i64, MaintenanceBudget, oneshot::Sender<Result<usize>>),
-    Checkpoint(MaintenanceBudget, oneshot::Sender<Result<()>>),
-    Stop(oneshot::Sender<Result<()>>),
-}
-
-enum Operation {
-    Search,
-    Count,
-    Facets,
-    Histogram(i64),
-    #[cfg(test)]
-    Expensive,
-    Tail(Option<i64>, usize),
-    Stop,
-}
-
-#[derive(serde::Serialize)]
-enum Answer {
-    Search(SearchResult),
-    Count(u64),
-    Facets(Facets),
-    Histogram(Vec<HistogramBucket>),
-}
-
-// The crate disconnects before clearing InterruptHandle. Own destruction behind
-// the same state mutex all interrupt paths hold, including unwinding on panic.
-struct ConnectionOwner<T> {
-    connection: Option<Connection>,
-    state: Arc<Mutex<Option<T>>>,
-    alive: Arc<AtomicBool>,
-}
-
-impl<T> Drop for ConnectionOwner<T> {
-    fn drop(&mut self) {
-        self.alive.store(false, Ordering::Release);
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *state = None;
-
-        drop(self.connection.take());
+impl Metrics {
+    fn record_group(&self, elapsed: Duration, requests: usize, events: usize, bytes: usize) {
+        let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+        self.commit_ns.fetch_add(nanos, Ordering::Relaxed);
+        self.commits.fetch_add(1, Ordering::Relaxed);
+        self.group_requests
+            .fetch_add(widen(requests), Ordering::Relaxed);
+        self.group_events
+            .fetch_add(widen(events), Ordering::Relaxed);
+        self.group_bytes.fetch_add(widen(bytes), Ordering::Relaxed);
     }
 }
+
+/// Retention privilege is independent of how memory was reserved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IngestionPolicy {
+    /// Live events must respect the durable retention cutoff.
+    Live,
+    /// Historical imports may precede the durable retention cutoff.
+    Import,
+}
+
+/// Message for a poisoned ingress admission lock.
+const INGRESS_ADMISSION_LOCK: &str = "ingress admission lock";
+
+/// Message for a poisoned storage admission lock.
+const STORAGE_ADMISSION_LOCK: &str = "storage admission lock";
+
+/// Nanoseconds in one second, for converting commit time to the metric unit.
+const NANOS_PER_SECOND: f64 = 1e9;
+
+/// Percentage points in one complete query, for the unit-interval progress gauge.
+const PERCENTAGE_SCALE: f64 = 100.0;
 
 struct WorkerHealth(Arc<AtomicBool>);
 
@@ -212,872 +307,252 @@ impl Drop for WorkerHealth {
     }
 }
 
-struct Cancellation {
-    cancelled: Arc<AtomicBool>,
-    interrupt: Arc<dyn Fn(u64) + Send + Sync>,
-    id: u64,
+/// Converts a count or byte total to the metric width. The conversion cannot
+/// saturate on supported targets, where `usize` is no wider than `u64`.
+fn widen(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-impl Drop for Cancellation {
-    fn drop(&mut self) {
-        self.cancelled.store(true, Ordering::Release);
-        (self.interrupt)(self.id);
-    }
+fn storage_unavailable() -> Error {
+    Error::unavailable("storage unavailable")
 }
 
-struct Read {
-    id: u64,
-    query: Option<Query>,
-    operation: Operation,
-    reply: oneshot::Sender<Result<Answer>>,
-    cancelled: Arc<AtomicBool>,
-    deadline: Instant,
-    max_bytes: usize,
-}
-
-fn check_cancelled(cancelled: &AtomicBool, deadline: Instant) -> Result<()> {
-    if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
-        return Err(Error::new(ErrorKind::Timeout, "query deadline exceeded"));
-    }
-
-    Ok(())
-}
-
-#[derive(Clone)]
-struct MaintenanceBudget {
-    cancelled: Arc<AtomicBool>,
-    deadline: Instant,
-}
-
-impl MaintenanceBudget {
-    fn check(&self) -> Result<()> {
-        if self.cancelled.load(Ordering::Acquire) || Instant::now() >= self.deadline {
-            Err(Error::new(
-                ErrorKind::Timeout,
-                "maintenance deadline exceeded",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn error(&self, error: Error) -> Error {
-        if error.kind == ErrorKind::Integrity {
-            error
-        } else {
-            self.check().err().unwrap_or(error)
-        }
-    }
-}
-
-/// Only maintenance SQL can arm the writer interrupt. The shared mutex makes
-/// disarming atomic with respect to watchdog and external cancellation calls.
-struct WriterScope {
-    budget: MaintenanceBudget,
-    active: Arc<Mutex<Option<MaintenanceBudget>>>,
-}
-
-impl WriterScope {
-    fn start(
-        budget: MaintenanceBudget,
-        active: &Arc<Mutex<Option<MaintenanceBudget>>>,
-    ) -> Result<Self> {
-        budget.check()?;
-        *active.lock().unwrap() = Some(budget.clone());
-
-        Ok(Self {
-            budget,
-            active: active.clone(),
-        })
-    }
-
-    fn check(&self) -> Result<()> {
-        let result = self.budget.check();
-
-        if result.is_err() {
-            self.disarm();
-        }
-
-        result
-    }
-
-    fn error(&self, error: duckdb::Error) -> Error {
-        self.disarm();
-        self.budget.error(db_error(error))
-    }
-
-    fn disarm(&self) {
-        *self.active.lock().unwrap() = None;
-    }
-
-    fn finish(&self) -> Result<()> {
-        let mut active = self.active.lock().unwrap();
-        let result = self.budget.check();
-        *active = None;
-
-        result
-    }
-}
-
-impl Drop for WriterScope {
-    fn drop(&mut self) {
-        self.disarm();
-    }
-}
-
-fn maintenance_outcome<T>(result: &Result<T>, metrics: &Metrics, ready: &AtomicBool) {
-    if let Err(error) = result {
-        metrics.maintenance_failures.fetch_add(1, Ordering::Relaxed);
-
-        if error.kind == ErrorKind::Integrity {
-            ready.store(false, Ordering::Release);
-        }
-    }
-}
-
-fn finish_archive_publication(
-    exported: Result<Option<Published>>,
-    writer: &mpsc::Sender<Write>,
-    budget: &MaintenanceBudget,
-    metrics: &Metrics,
-    ready: &AtomicBool,
-    reply: oneshot::Sender<Result<usize>>,
-) {
-    // Keep cleanup ownership on maintenance until the reply is sent. Writer
-    // errors must not unlink output while holding the snapshot gate.
-    let _ownership = match &exported {
-        Ok(Some(file)) => Some((file.reservation.clone(), file.artifact.clone())),
-        _ => None,
-    };
-
-    let result = match exported {
-        Ok(Some(file)) => {
-            let (sender, receiver) = oneshot::channel();
-            maintenance_send(writer, Write::Publish(file, budget.clone(), sender), budget)
-                .and_then(|_| maintenance_reply(receiver, budget))
-        }
-        Ok(None) => budget.check().map(|_| 0),
-        Err(error) => Err(budget.error(error)),
-    };
-
-    maintenance_outcome(&result, metrics, ready);
-    let _ = reply.send(result);
-}
-
-fn maintenance_send(
-    writer: &mpsc::Sender<Write>,
-    mut command: Write,
-    budget: &MaintenanceBudget,
-) -> Result<()> {
-    loop {
-        budget.check()?;
-
-        match writer.try_send(command) {
-            Ok(()) => return Ok(()),
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                return Err(Error::unavailable("writer closed"));
-            }
-
-            Err(mpsc::error::TrySendError::Full(returned)) => command = returned,
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
-fn maintenance_reply<T>(
-    mut receiver: oneshot::Receiver<Result<T>>,
-    budget: &MaintenanceBudget,
-) -> Result<T> {
-    loop {
-        match receiver.try_recv() {
-            Ok(result) => return result,
-            Err(oneshot::error::TryRecvError::Closed) => {
-                return Err(Error::unavailable("writer closed"));
-            }
-
-            Err(oneshot::error::TryRecvError::Empty) => budget.check()?,
-        }
-        thread::sleep(Duration::from_millis(1));
-    }
-}
-
-fn maintenance_gate<'a>(
-    gate: &'a Mutex<ArchiveLeases>,
-    budget: &MaintenanceBudget,
-) -> Result<std::sync::MutexGuard<'a, ArchiveLeases>> {
-    loop {
-        budget.check()?;
-
-        match gate.try_lock() {
-            Ok(lease) => return Ok(lease),
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err(Error::new(
-                    ErrorKind::Integrity,
-                    "archive snapshot gate poisoned",
-                ));
-            }
-
-            Err(std::sync::TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(1)),
-        }
-    }
+fn writer_closed() -> Error {
+    Error::unavailable("writer closed")
 }
 
 fn validate_archive_name(path: &str) -> Result<()> {
-    if path.is_empty()
-        || Path::new(path).components().count() != 1
-        || path.contains(['*', '?', '[', ']', '{', '}'])
-        || path == "."
-        || path == ".."
-    {
+    let is_literal_filename = !path.is_empty()
+        && Path::new(path).components().count() == 1
+        && !path.contains(['*', '?', '[', ']', '{', '}']);
+    let is_relative_directory = path == "." || path == "..";
+    if !is_literal_filename || is_relative_directory {
         return Err(Error::invalid("archive path must be a literal filename"));
     }
 
     Ok(())
 }
 
+/// Creates the data layout and opens the primary connection with bounded engine settings.
+fn prepare_config(config: StorageConfig) -> Result<StorageConfig> {
+    let mut config = config;
+    crate::config::validate_promoted_string_keys(&config.promoted_string_keys)?;
+
+    if config.data_dir.is_relative() {
+        config.data_dir = std::env::current_dir()
+            .map_err(db_error)?
+            .join(&config.data_dir);
+    }
+
+    crate::config::validate_literal_path(&config.data_dir)?;
+
+    let invalid_archive_window = config.archive_batch_rows == 0 || config.archive_partition_ms <= 0;
+    let invalid_compaction = config.compact_max_files < 2 || config.compact_max_bytes == 0;
+    if invalid_archive_window || invalid_compaction || config.maintenance_timeout_ms == 0 {
+        return Err(Error::invalid("invalid archive maintenance budgets"));
+    }
+
+    Ok(config)
+}
+
+/// Returns the primary connection and the archive directory, both prepared under the data dir.
+fn open_database(config: &StorageConfig) -> Result<(Connection, PathBuf)> {
+    create_dir_all(&config.data_dir).map_err(db_error)?;
+    let temp = config.data_dir.join("temp");
+    create_dir_all(&temp).map_err(db_error)?;
+    let archives = config.data_dir.join("archives");
+    create_dir_all(&archives).map_err(db_error)?;
+
+    let conn = Connection::open(config.data_dir.join("events.duckdb")).map_err(db_error)?;
+    conn.execute_batch(&format!(
+        "SET memory_limit='{}'; \
+         SET max_temp_directory_size='{}'; \
+         SET threads={}; \
+         SET temp_directory='{}'; \
+         SET errors_as_json=true; \
+         SET autoinstall_known_extensions=false; \
+         SET autoload_known_extensions=false;",
+        quote(&config.memory_limit),
+        quote(&config.temp_limit),
+        config.duckdb_threads,
+        quote(&temp.to_string_lossy())
+    ))
+    .map_err(db_error)?;
+
+    Ok((conn, archives))
+}
+
+/// The primary connection and the durable state it was validated against.
+struct ValidatedDatabase {
+    conn: Connection,
+    archives: PathBuf,
+    projection: Option<projection::ProjectionLayout>,
+}
+
+/// Opens the primary connection and validates durable state before any worker starts.
+fn open_validated(config: &StorageConfig) -> Result<ValidatedDatabase> {
+    let (mut conn, archives) = open_database(config)?;
+    migrate(&mut conn)?;
+    let projection = projection::activate(&mut conn, &config.promoted_string_keys)?;
+    recover(&conn, &archives)?;
+
+    Ok(ValidatedDatabase {
+        conn,
+        archives,
+        projection,
+    })
+}
+
+/// Clones the primary connection once per reader, so no reader starts if one clone fails.
+fn clone_connections(conn: &Connection, count: usize) -> Result<Vec<Connection>> {
+    (0..count)
+        .map(|_| conn.try_clone().map_err(db_error))
+        .collect()
+}
+
+fn quote(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 impl Storage {
+    /// Opens or creates the index under `config.data_dir`. Durable state is validated
+    /// before any worker accepts ingestion or queries.
+    ///
+    /// # Errors
+    /// Fails on invalid budgets, on durable state that cannot be migrated or recovered,
+    /// and when the engine cannot start.
     pub fn open(config: StorageConfig) -> Result<Self> {
-        Self::open_with_ingested_counter(config, Arc::new(AtomicU64::new(0)))
+        Self::open_with_ingested_counter(
+            config,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(IngressAdmission::new()),
+        )
     }
 
     pub(crate) fn open_with_ingested_counter(
         config: StorageConfig,
         ingested: Arc<AtomicU64>,
+        admission: Arc<IngressAdmission>,
     ) -> Result<Self> {
-        let mut config = config;
+        let config = prepare_config(config)?;
+        let ValidatedDatabase {
+            conn,
+            archives,
+            projection,
+        } = open_validated(&config)?;
 
-        if config.data_dir.is_relative() {
-            config.data_dir = std::env::current_dir()
-                .map_err(db_error)?
-                .join(&config.data_dir);
-        }
-        crate::config::validate_literal_path(&config.data_dir)?;
-
-        if config.archive_batch_rows == 0
-            || config.archive_partition_ms <= 0
-            || config.compact_max_files < 2
-            || config.compact_max_bytes == 0
-            || config.maintenance_timeout_ms == 0
-        {
-            return Err(Error::invalid("invalid archive maintenance budgets"));
-        }
-
-        std::fs::create_dir_all(&config.data_dir).map_err(db_error)?;
-        let temp = config.data_dir.join("temp");
-        std::fs::create_dir_all(&temp).map_err(db_error)?;
-        let archives = config.data_dir.join("archives");
-        std::fs::create_dir_all(&archives).map_err(db_error)?;
-
-        let mut conn = Connection::open(config.data_dir.join("events.duckdb")).map_err(db_error)?;
-        conn.execute_batch(&format!(
-            "SET memory_limit='{}'; \
-             SET max_temp_directory_size='{}'; \
-             SET threads={}; \
-             SET temp_directory='{}'; \
-             SET errors_as_json=true; \
-             SET autoinstall_known_extensions=false; \
-             SET autoload_known_extensions=false;",
-            quote(&config.memory_limit),
-            quote(&config.temp_limit),
-            config.duckdb_threads,
-            quote(&temp.to_string_lossy())
-        ))
-        .map_err(db_error)?;
-
-        // Validate durable state before workers can accept ingestion or queries.
-        migrate(&mut conn)?;
-        recover(&conn, &archives)?;
         let ready = Arc::new(AtomicBool::new(true));
         let retention_before: i64 = conn
-            .query_row(
-                "SELECT before_time FROM retention_state WHERE singleton=1",
-                [],
-                |row| row.get(0),
-            )
+            .query_row(RETENTION_CUTOFF_SQL, [], |row| row.get(0))
             .map_err(db_error)?;
         let metrics = Arc::new(Metrics {
             retention_before_ms: AtomicI64::new(retention_before),
             ..Metrics::default()
         });
 
-        let writer_metrics = metrics.clone();
         let gate = Arc::new(Mutex::new(ArchiveLeases::default()));
-        let mut reader_connections = Vec::new();
-
-        for _ in 0..config.reader_threads.max(1) {
-            reader_connections.push(conn.try_clone().map_err(db_error)?);
-        }
-
+        let reader_connections = clone_connections(&conn, config.reader_threads.max(1))?;
         let maintenance_connection = conn.try_clone().map_err(db_error)?;
-        let (writer, mut rx) = mpsc::channel(config.queue_capacity.max(1));
-        let reader_archives = archives.clone();
-        let writer_ready = ready.clone();
+        // Progress is diagnostic only. Each connection must opt in separately;
+        // polling never changes deadlines, cancellation, or reader occupancy.
+        let query_progress = reader_connections
+            .iter()
+            .map(track_query_progress)
+            .collect::<Result<Vec<_>>>()?;
+        let maintenance_progress = track_query_progress(&maintenance_connection)?;
 
+        let (writer_tx, writer_rx) = mpsc::channel(config.queue_capacity.max(1));
         let committed = Arc::new(AtomicU64::new(0));
-        let writer_committed = committed.clone();
         let (commits, _) = watch::channel(0);
-        let writer_commits = commits.clone();
-
         let disk_budget = DiskBudget::new(config.data_dir.clone(), config.max_size_bytes)?;
-        let writer_budget = disk_budget.clone();
-        let writer_gate = gate.clone();
-        let retention_rows = config.archive_batch_rows;
 
+        // Nothing below can fail, so every thread started from here on is owned by the
+        // handle this function returns.
         let maintenance_cancel = Arc::new(AtomicBool::new(false));
         let writer_active = Arc::new(Mutex::new(None::<MaintenanceBudget>));
-        let writer_alive = Arc::new(AtomicBool::new(true));
         let writer_interrupt = conn.interrupt_handle();
-        let writer_watch_active = writer_active.clone();
-        let writer_watch_alive = writer_alive.clone();
-        let writer_watch_interrupt = writer_interrupt.clone();
-
-        // Each native connection has one worker owner. Watchdogs only interrupt
-        // under its state mutex, which also protects connection destruction.
-        let mut joins = vec![thread::spawn(move || {
-            let _health = WorkerHealth(writer_ready.clone());
-            let mut owner = ConnectionOwner {
-                connection: Some(conn),
-                state: writer_active.clone(),
-                alive: writer_alive,
-            };
-
-            while let Some(cmd) = rx.blocking_recv() {
-                let conn = owner.connection.as_mut().unwrap();
-
-                match cmd {
-                    #[cfg(test)]
-                    Write::Test(task) => task(conn, &writer_active),
-                    Write::Append(source, events, reply, _permit, _request_permit) => {
-                        let started = Instant::now();
-                        let mut result = writer_budget.check_write().and_then(|_| {
-                            append_queued(conn, &source, &events, _request_permit.is_some())
-                        });
-
-                        if result
-                            .as_ref()
-                            .is_err_and(|error| error.kind != ErrorKind::SizeLimit)
-                        {
-                            let _ = conn.execute_batch("ROLLBACK");
-
-                            if conn
-                                .query_row(
-                                    "SELECT next_id FROM ingest_state WHERE singleton=1",
-                                    [],
-                                    |r| r.get::<_, i64>(0),
-                                )
-                                .is_err()
-                            {
-                                result = Err(Error::new(
-                                    ErrorKind::Integrity,
-                                    "writer connection recovery failed",
-                                ));
-                            }
-                        }
-
-                        writer_metrics
-                            .commit_ns
-                            .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
-                        writer_metrics.commits.fetch_add(1, Ordering::Relaxed);
-
-                        if let Ok(count) = &result {
-                            ingested.fetch_add(*count as u64, Ordering::Relaxed);
-                            let _ = writer_budget.refresh_native();
-                            let total = writer_committed
-                                .fetch_add(*count as u64, Ordering::Relaxed)
-                                + *count as u64;
-                            writer_commits.send_replace(total);
-                        }
-
-                        if result
-                            .as_ref()
-                            .is_err_and(|e| matches!(e.kind, ErrorKind::Integrity))
-                        {
-                            writer_ready.store(false, Ordering::Release);
-                        }
-
-                        let _ = reply.send(result);
-                    }
-                    Write::Publish(file, budget, reply) => {
-                        // The bounded maintenance waiter may already have returned.
-                        // Retain cleanup ownership until after releasing the gate.
-                        let _cleanup = file.artifact.clone();
-                        let _reservation = file.reservation.clone();
-                        let replaced = file.replaced.clone();
-                        let file_bytes = file.bytes;
-                        let result =
-                            maintenance_gate(&writer_gate, &budget).and_then(|mut lease| {
-                                let scope = WriterScope::start(budget, &writer_active)?;
-                                let result = archive::publish_bounded(conn, file, &scope);
-
-                                drop(scope);
-
-                                if result.is_ok() {
-                                    lease.retire(replaced);
-                                    writer_budget.published(file_bytes);
-                                }
-
-                                result
-                            });
-
-                        if result
-                            .as_ref()
-                            .is_err_and(|e| matches!(e.kind, ErrorKind::Integrity))
-                        {
-                            writer_ready.store(false, Ordering::Release);
-                        }
-
-                        let _ = reply.send(result);
-                    }
-                    Write::Retain(before, expired, budget, reply) => {
-                        let result =
-                            maintenance_gate(&writer_gate, &budget).and_then(|mut lease| {
-                                let scope = WriterScope::start(budget, &writer_active)?;
-                                archive::retain_bounded(
-                                    conn,
-                                    before,
-                                    expired,
-                                    &mut lease,
-                                    retention_rows,
-                                    &scope,
-                                )
-                            });
-
-                        if result.is_ok() {
-                            writer_metrics
-                                .retention_before_ms
-                                .fetch_max(before, Ordering::Release);
-                            writer_commits.send_replace(writer_committed.load(Ordering::Relaxed));
-                        }
-
-                        if result
-                            .as_ref()
-                            .is_err_and(|e| matches!(e.kind, ErrorKind::Integrity))
-                        {
-                            writer_ready.store(false, Ordering::Release);
-                        }
-
-                        let _ = reply.send(result);
-                    }
-                    Write::Checkpoint(budget, reply) => {
-                        let result = WriterScope::start(budget, &writer_active).and_then(|scope| {
-                            conn.execute_batch("CHECKPOINT")
-                                .map_err(|error| scope.error(error))?;
-                            scope.finish()
-                        });
-
-                        let _ = writer_budget.refresh_native();
-
-                        if result
-                            .as_ref()
-                            .is_err_and(|error| error.kind == ErrorKind::Integrity)
-                        {
-                            writer_ready.store(false, Ordering::Release);
-                        }
-
-                        let _ = reply.send(result);
-                    }
-                    Write::Stop(reply) => {
-                        rx.close();
-
-                        while let Some(cmd) = rx.blocking_recv() {
-                            if let Write::Append(source, events, reply, _permit, _request_permit) =
-                                cmd
-                            {
-                                let result = writer_budget.check_write().and_then(|_| {
-                                    append_queued(conn, &source, &events, _request_permit.is_some())
-                                });
-
-                                if let Ok(count) = &result {
-                                    ingested.fetch_add(*count as u64, Ordering::Relaxed);
-                                    let _ = writer_budget.refresh_native();
-                                    let total = writer_committed
-                                        .fetch_add(*count as u64, Ordering::Relaxed)
-                                        + *count as u64;
-                                    writer_commits.send_replace(total);
-                                }
-
-                                if result
-                                    .as_ref()
-                                    .is_err_and(|e| matches!(e.kind, ErrorKind::Integrity))
-                                {
-                                    writer_ready.store(false, Ordering::Release);
-                                }
-
-                                let _ = reply.send(result);
-                            }
-                        }
-
-                        let result = conn.execute_batch("CHECKPOINT").map_err(db_error);
-
-                        if result
-                            .as_ref()
-                            .is_err_and(|e| matches!(e.kind, ErrorKind::Integrity))
-                        {
-                            writer_ready.store(false, Ordering::Release);
-                        }
-
-                        let _ = reply.send(result);
-                        break;
-                    }
-                }
-            }
-
-            writer_ready.store(false, Ordering::Release);
-        })];
-
-        let writer_for_external = writer_watch_active.clone();
-        joins.push(thread::spawn(move || {
-            while writer_watch_alive.load(Ordering::Acquire) {
-                {
-                    let active = writer_watch_active.lock().unwrap();
-
-                    if active
-                        .as_ref()
-                        .is_some_and(|budget| budget.check().is_err())
-                    {
-                        writer_watch_interrupt.interrupt();
-                    }
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-        }));
-
-        let (maintenance, mut maintenance_rx) = mpsc::channel(config.queue_capacity.max(1));
-        let publication = writer.clone();
-        let maintenance_ready = ready.clone();
-        let maintenance_metrics = metrics.clone();
-        let maintenance_gate = gate.clone();
-        let maintenance_budget = disk_budget.clone();
-        let cancel_export = maintenance_cancel.clone();
-        let native_interrupt = maintenance_connection.interrupt_handle();
         let maintenance_deadline = Arc::new(Mutex::new(None::<Instant>));
-        let interrupt_state = maintenance_deadline.clone();
-        let native_for_external = native_interrupt.clone();
-        let maintenance_interrupt: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let active = interrupt_state.lock().unwrap();
+        let native_interrupt = maintenance_connection.interrupt_handle();
+        let maintenance_interrupt = build_maintenance_interrupt(
+            Arc::clone(&maintenance_deadline),
+            Arc::clone(&native_interrupt),
+            Arc::clone(&writer_active),
+            Arc::clone(&writer_interrupt),
+        );
 
-            if active.is_some() {
-                native_for_external.interrupt();
-            }
+        let writer = Writer {
+            ready: Arc::clone(&ready),
+            ingested,
+            committed: Arc::clone(&committed),
+            commits: commits.clone(),
+            metrics: Arc::clone(&metrics),
+            disk: Arc::clone(&disk_budget),
+            gate: Arc::clone(&gate),
+            active: writer_active,
+            projection: projection.clone(),
+            retention_rows: config.archive_batch_rows,
+        };
 
-            let active = writer_for_external.lock().unwrap();
+        let mut joins = Vec::new();
+        spawn_writer_side(conn, writer_rx, writer, writer_interrupt, &mut joins);
 
-            if active.is_some() {
-                writer_interrupt.interrupt();
-            }
-        });
+        let (maintenance, maintenance_rx) = mpsc::channel(config.queue_capacity.max(1));
+        let maintainer = Maintainer {
+            ready: Arc::clone(&ready),
+            metrics: Arc::clone(&metrics),
+            gate: Arc::clone(&gate),
+            disk: Arc::clone(&disk_budget),
+            cancel: Arc::clone(&maintenance_cancel),
+            deadline: maintenance_deadline,
+            watchdog_alive: Arc::new(AtomicBool::new(true)),
+            archives: archives.clone(),
+            publication: writer_tx.clone(),
+            timeout: Duration::from_millis(config.maintenance_timeout_ms),
+            export_rows: config.archive_batch_rows,
+            partition_ms: config.archive_partition_ms,
+            compact_files: config.compact_max_files,
+            compact_bytes: config.compact_max_bytes,
+        };
+        spawn_maintenance_side(
+            maintenance_connection,
+            native_interrupt,
+            maintainer,
+            maintenance_rx,
+            &mut joins,
+        );
 
-        let maintenance_watchdog_alive = Arc::new(AtomicBool::new(true));
-        let deadline_watch = maintenance_deadline.clone();
-        let alive_watch = maintenance_watchdog_alive.clone();
-        let interrupt_watch = native_interrupt;
-        let cancel_watch = maintenance_cancel.clone();
-        joins.push(thread::spawn(move || {
-            while alive_watch.load(Ordering::Acquire) {
-                {
-                    let active = deadline_watch.lock().unwrap();
-
-                    if active.is_some_and(|deadline| {
-                        Instant::now() >= deadline || cancel_watch.load(Ordering::Acquire)
-                    }) {
-                        interrupt_watch.interrupt();
-                    }
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-        }));
-
-        let maintenance_timeout = Duration::from_millis(config.maintenance_timeout_ms);
-        let export_rows = config.archive_batch_rows;
-        let partition_ms = config.archive_partition_ms;
-        let compact_files = config.compact_max_files;
-        let compact_bytes = config.compact_max_bytes;
-        joins.push(thread::spawn(move || {
-            let _health = WorkerHealth(maintenance_ready.clone());
-            let mut owner = ConnectionOwner {
-                connection: Some(maintenance_connection),
-                state: maintenance_deadline.clone(),
-                alive: maintenance_watchdog_alive.clone(),
-            };
-
-            while let Some(command) = maintenance_rx.blocking_recv() {
-                if let Maintenance::Stop(reply) = command {
-                    maintenance_watchdog_alive.store(false, Ordering::Release);
-                    let _ = reply.send(());
-                    break;
-                }
-
-                let deadline = Instant::now() + maintenance_timeout;
-                let budget = MaintenanceBudget {
-                    cancelled: cancel_export.clone(),
-                    deadline,
-                };
-                *maintenance_deadline.lock().unwrap() = Some(deadline);
-
-                cleanup_archives(&maintenance_gate, &archives);
-                let _ = maintenance_budget.audit();
-
-                match command {
-                    Maintenance::Archive(before, reply) => {
-                        let result = export_bounded(
-                            owner.connection.as_mut().unwrap(),
-                            &archives,
-                            before,
-                            export_rows,
-                            partition_ms,
-                            ArchiveWork {
-                                cancelled: &cancel_export,
-                                deadline,
-                                quota: maintenance_budget.limit.map(|_| &maintenance_budget),
-                            },
-                        );
-
-                        finish_archive_publication(
-                            result,
-                            &publication,
-                            &budget,
-                            &maintenance_metrics,
-                            &maintenance_ready,
-                            reply,
-                        );
-                    }
-                    Maintenance::EnforceSize(reply) => {
-                        let result = quota::enforce_size(
-                            owner.connection.as_mut().unwrap(),
-                            &archives,
-                            &maintenance_budget,
-                            &publication,
-                            quota::SizeWork {
-                                gate: &maintenance_gate,
-                                rows: export_rows,
-                                budget: &budget,
-                            },
-                        )
-                        .map_err(|error| budget.error(error));
-
-                        if let Err(error) = &result {
-                            maintenance_metrics
-                                .maintenance_failures
-                                .fetch_add(1, Ordering::Relaxed);
-
-                            if error.kind == ErrorKind::Integrity {
-                                maintenance_ready.store(false, Ordering::Release);
-                            }
-                        }
-
-                        let _ = reply.send(result);
-                    }
-                    Maintenance::Retain(before, reply) => {
-                        let result = expired_id(
-                            owner.connection.as_mut().unwrap(),
-                            &archives,
-                            before,
-                            &cancel_export,
-                            deadline,
-                        );
-
-                        match result {
-                            Ok(expired) => {
-                                let (tx, rx) = oneshot::channel();
-                                let result = maintenance_send(
-                                    &publication,
-                                    Write::Retain(before, expired, budget.clone(), tx),
-                                    &budget,
-                                )
-                                .and_then(|_| maintenance_reply(rx, &budget));
-                                maintenance_outcome(
-                                    &result,
-                                    &maintenance_metrics,
-                                    &maintenance_ready,
-                                );
-                                let _ = reply.send(result);
-                            }
-
-                            Err(e) => {
-                                let e = budget.error(e);
-                                maintenance_metrics
-                                    .maintenance_failures
-                                    .fetch_add(1, Ordering::Relaxed);
-
-                                if matches!(e.kind, ErrorKind::Integrity) {
-                                    maintenance_ready.store(false, Ordering::Release);
-                                }
-
-                                let _ = reply.send(Err(e));
-                            }
-                        }
-                    }
-                    Maintenance::Compact(reply) => {
-                        let result = compact_export(
-                            owner.connection.as_mut().unwrap(),
-                            &archives,
-                            compact_files,
-                            compact_bytes,
-                            partition_ms,
-                            ArchiveWork {
-                                cancelled: &cancel_export,
-                                deadline,
-                                quota: maintenance_budget.limit.map(|_| &maintenance_budget),
-                            },
-                        );
-
-                        finish_archive_publication(
-                            result,
-                            &publication,
-                            &budget,
-                            &maintenance_metrics,
-                            &maintenance_ready,
-                            reply,
-                        );
-                    }
-                    Maintenance::Stop(_) => unreachable!(),
-                }
-                *maintenance_deadline.lock().unwrap() = None;
-                let _ = owner.connection.as_mut().unwrap().execute_batch("ROLLBACK");
-
-                cleanup_archives(&maintenance_gate, &archives);
-                let _ = maintenance_budget.audit();
-            }
-
-            maintenance_watchdog_alive.store(false, Ordering::Release);
-
-            drop(owner);
-        }));
-
-        // Readers compete for one shared queue so an idle connection can take
-        // the next request while another connection is still running SQL.
-        let (reader_tx, reader_rx) = mpsc::channel::<Read>(config.queue_capacity.max(1));
-        let reader_rx = Arc::new(Mutex::new(reader_rx));
-        let mut readers = Vec::new();
-        let mut interrupts: Vec<Arc<dyn Fn(u64) + Send + Sync>> = Vec::new();
-
-        for connection in reader_connections {
-            readers.push(reader_tx.clone());
-            let shared_rx = reader_rx.clone();
-            let gate = gate.clone();
-            let reader_archives = reader_archives.clone();
-            let ready = ready.clone();
-            let max_result_bytes = config.max_query_bytes;
-            let reader_metrics = metrics.clone();
-            let running = Arc::new(Mutex::new(None::<(u64, Instant, Arc<AtomicBool>)>));
-            let watchdog_alive = Arc::new(AtomicBool::new(true));
-            let watchdog_running = running.clone();
-            let watchdog_stop = watchdog_alive.clone();
-            let watchdog_interrupt = connection.interrupt_handle();
-            joins.push(thread::spawn(move || {
-                while watchdog_stop.load(Ordering::Acquire) {
-                    {
-                        let active = watchdog_running.lock().unwrap();
-
-                        if let Some((_, deadline, cancelled)) = active.as_ref()
-                            && (cancelled.load(Ordering::Acquire) || Instant::now() >= *deadline)
-                        {
-                            watchdog_interrupt.interrupt();
-                        }
-                    }
-                    thread::sleep(Duration::from_millis(5));
-                }
-            }));
-            let interrupt = connection.interrupt_handle();
-            let current = running.clone();
-            interrupts.push(Arc::new(move |id| {
-                let active = current.lock().unwrap();
-
-                if active
-                    .as_ref()
-                    .is_some_and(|(current, _, _)| id == u64::MAX || *current == id)
-                {
-                    interrupt.interrupt();
-                }
-            }));
-            joins.push(thread::spawn(move || {
-                let _health = WorkerHealth(ready.clone());
-                let mut owner = ConnectionOwner {
-                    connection: Some(connection),
-                    state: running.clone(),
-                    alive: watchdog_alive.clone(),
-                };
-
-                loop {
-                    let Some(req) = shared_rx.lock().unwrap().blocking_recv() else {
-                        break;
-                    };
-
-                    if matches!(req.operation, Operation::Stop) {
-                        let _ = req.reply.send(Ok(Answer::Count(0)));
-                        break;
-                    }
-
-                    if req.cancelled.load(Ordering::Acquire) {
-                        continue;
-                    }
-
-                    {
-                        let mut active = running.lock().unwrap();
-
-                        if req.cancelled.load(Ordering::Acquire) {
-                            continue;
-                        }
-                        *active = Some((req.id, req.deadline, req.cancelled.clone()));
-                    }
-
-                    reader_metrics.busy_readers.fetch_add(1, Ordering::Relaxed);
-                    let answer = run_query(
-                        owner.connection.as_mut().unwrap(),
-                        &reader_archives,
-                        req.query.as_ref().unwrap(),
-                        req.operation,
-                        req.max_bytes.min(max_result_bytes),
-                        &gate,
-                        QueryDeadline {
-                            cancelled: &req.cancelled,
-                            at: req.deadline,
-                        },
-                    );
-                    // Clear interruption state only after native work returns;
-                    // a timed-out waiter does not make this connection available.
-                    *running.lock().unwrap() = None;
-                    reader_metrics.busy_readers.fetch_sub(1, Ordering::Relaxed);
-
-                    if answer.is_err() {
-                        let _ = owner.connection.as_mut().unwrap().execute_batch("ROLLBACK");
-                    }
-
-                    let answer = if req.cancelled.load(Ordering::Acquire)
-                        || Instant::now() >= req.deadline
-                    {
-                        Err(Error::new(ErrorKind::Timeout, "query deadline exceeded"))
-                    } else {
-                        answer
-                    };
-
-                    if answer
-                        .as_ref()
-                        .is_err_and(|e| matches!(e.kind, ErrorKind::Integrity))
-                    {
-                        ready.store(false, Ordering::Release);
-                    }
-
-                    let _ = req.reply.send(answer);
-                }
-
-                watchdog_alive.store(false, Ordering::Release);
-
-                drop(owner);
-                ready.store(false, Ordering::Release);
-            }));
-        }
+        let shared = ReaderShared {
+            ready: Arc::clone(&ready),
+            metrics: Arc::clone(&metrics),
+            gate: Arc::clone(&gate),
+            archives: archives.clone(),
+            max_result_bytes: config.max_query_bytes,
+        };
+        let (readers, interrupts) = spawn_reader_side(
+            reader_connections,
+            config.queue_capacity.max(1),
+            &shared,
+            &mut joins,
+        );
 
         Ok(Self {
             inner: Arc::new(Inner {
-                writer,
+                projection,
+                writer: writer_tx,
                 maintenance,
                 readers,
                 interrupts,
+                query_progress,
+                maintenance_progress,
                 next: AtomicU64::new(0),
                 committed,
                 ready,
+                admission,
+                accepting: Mutex::new(true),
                 bytes: Arc::new(Semaphore::new(config.queue_bytes)),
+                max_queue_bytes: config.queue_bytes,
+                forward_bytes: Arc::new(Semaphore::new(forward_byte_share(config.queue_bytes))),
+                forward_slots: Arc::new(Semaphore::new((config.queue_capacity / 2).max(1))),
                 timeout: Duration::from_millis(config.query_timeout_ms),
                 commits,
                 max_result_bytes: config.max_query_bytes,
@@ -1093,14 +568,18 @@ impl Storage {
         })
     }
 
+    /// Receives the cumulative committed-event count after each commit.
     pub fn subscribe_commits(&self) -> watch::Receiver<u64> {
         self.inner.commits.subscribe()
     }
 
     /// Filesystem work: callers should run this in their bounded blocking pool.
+    ///
+    /// # Errors
+    /// Fails if storage admission is closed or the filesystem cannot be inspected.
     pub fn disk_usage(&self) -> Result<DiskUsage> {
         if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
+            return Err(storage_unavailable());
         }
 
         let footprint = quota::footprint(&self.inner.data_dir)?;
@@ -1115,6 +594,10 @@ impl Storage {
         })
     }
 
+    /// Renders the storage metrics in the Prometheus text exposition format.
+    ///
+    /// # Panics
+    /// Panics if the archive-lease lock is poisoned.
     pub fn metrics_prometheus(&self) -> String {
         let db =
             std::fs::metadata(self.inner.data_dir.join("events.duckdb")).map_or(0, |m| m.len());
@@ -1164,6 +647,9 @@ impl Storage {
                 logbrook_storage_maintenance_failures_total {}\n\
                 logbrook_storage_commit_seconds_sum {}\n\
                 logbrook_storage_commits_total {}\n\
+                logbrook_storage_group_requests_total {}\n\
+                logbrook_storage_group_events_total {}\n\
+                logbrook_storage_group_bytes_total {}\n\
                 logbrook_storage_archive_files {files}\n\
                 logbrook_storage_deferred_unlinks {deferred}\n\
                 logbrook_storage_archive_bytes {archived_bytes}\n\
@@ -1175,261 +661,204 @@ impl Storage {
             m.busy_readers.load(Ordering::Relaxed),
             m.timeouts.load(Ordering::Relaxed),
             m.maintenance_failures.load(Ordering::Relaxed),
-            m.commit_ns.load(Ordering::Relaxed) as f64 / 1e9,
-            m.commits.load(Ordering::Relaxed)
+            m.commit_ns.load(Ordering::Relaxed) as f64 / NANOS_PER_SECOND,
+            m.commits.load(Ordering::Relaxed),
+            m.group_requests.load(Ordering::Relaxed),
+            m.group_events.load(Ordering::Relaxed),
+            m.group_bytes.load(Ordering::Relaxed)
         );
-        samples
-            .lines()
-            .map(|line| {
-                let name = line.split_whitespace().next().unwrap();
-                let kind = if name.ends_with("_total") || name.ends_with("_seconds_sum") {
-                    "counter"
-                } else {
-                    "gauge"
-                };
-                format!(
-                    "# HELP {name} Storage {}.\n# TYPE {name} {kind}\n{line}\n",
-                    name.trim_start_matches("logbrook_storage_")
-                        .replace('_', " ")
-                )
-            })
-            .collect()
+        let mut output = describe_metric_samples(&samples);
+        push_query_progress(
+            &mut output,
+            &self.inner.query_progress,
+            &self.inner.maintenance_progress,
+        );
+        output
     }
 
+    /// Returns the next page of matching events after an optional cursor.
+    ///
+    /// # Errors
+    /// Fails for invalid or expired cursors, unavailable storage, query deadlines,
+    /// integrity failures, or results that exceed the configured byte budget.
     pub async fn tail_filtered(&self, after_id: Option<String>, q: Query) -> Result<SearchResult> {
         let after = after_id
-            .map(|s| {
-                s.parse::<i64>()
-                    .map_err(|_| Error::invalid("invalid tail cursor"))
-            })
+            .map(|token| crate::query_cursor::decode_tail(&q, &token))
             .transpose()?;
-
-        match self.query(q, Operation::Tail(after, 0)).await? {
+        match self.query(q, Operation::Tail(after)).await? {
             Answer::Search(v) => Ok(v),
-            _ => unreachable!(),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Like [`Storage::tail_filtered`], with a response byte budget.
+    ///
+    /// # Errors
+    /// Fails for a zero byte budget, invalid or expired cursors, unavailable storage,
+    /// query deadlines, integrity failures, or results that exceed the byte budget.
     pub async fn tail_filtered_bounded(
         &self,
         after_id: Option<String>,
         q: Query,
         max_bytes: usize,
     ) -> Result<SearchResult> {
-        self.tail_filtered_bounded_with_overhead(after_id, q, max_bytes, 0)
-            .await
-    }
-
-    pub async fn tail_filtered_bounded_with_overhead(
-        &self,
-        after_id: Option<String>,
-        q: Query,
-        max_bytes: usize,
-        extra_frame_bytes: usize,
-    ) -> Result<SearchResult> {
         if max_bytes == 0 {
             return Err(Error::invalid("tail byte budget must be positive"));
         }
 
         let after = after_id
-            .map(|s| {
-                s.parse::<i64>()
-                    .map_err(|_| Error::invalid("invalid tail cursor"))
-            })
+            .map(|token| crate::query_cursor::decode_tail(&q, &token))
             .transpose()?;
-
         match self
-            .query_bounded(
-                q,
-                Operation::Tail(after, extra_frame_bytes),
-                Some(max_bytes),
-            )
+            .query_bounded(q, Operation::Tail(after), Some(max_bytes))
             .await?
         {
             Answer::Search(value) => Ok(value),
-            _ => unreachable!(),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Events committed since this process opened the index.
     pub fn committed_events(&self) -> u64 {
         self.inner.committed.load(Ordering::Relaxed)
     }
 
+    /// Cancels the running maintenance command and interrupts its native work.
     pub fn cancel_maintenance(&self) {
         self.inner.maintenance_cancel.store(true, Ordering::Release);
         (self.inner.maintenance_interrupt)();
     }
 
+    /// Stops accepting new appends and cancels running maintenance.
+    ///
+    /// # Panics
+    /// Panics if an admission or maintenance interruption-state lock is poisoned.
     pub fn stop_admission(&self) {
+        *self.inner.accepting.lock().expect(STORAGE_ADMISSION_LOCK) = false;
         self.cancel_maintenance();
-        self.inner.ready.store(false, Ordering::Release);
     }
 
+    /// Whether the index accepts work: admission is open and every worker remains healthy.
+    ///
+    /// # Panics
+    /// Panics if an ingress or storage admission lock is poisoned.
     pub fn is_ready(&self) -> bool {
         self.inner.ready.load(Ordering::Acquire)
+            && *self
+                .inner
+                .admission
+                .accepting
+                .lock()
+                .expect(INGRESS_ADMISSION_LOCK)
+            && *self.inner.accepting.lock().expect(STORAGE_ADMISSION_LOCK)
     }
 
+    /// Historical imports intentionally bypass the live retention cutoff.
+    ///
+    /// # Errors
+    /// Fails when admission or byte budgets are exhausted, storage is unavailable,
+    /// or preparation or commit cannot complete.
     pub async fn append(&self, source: String, events: Vec<NormalizedEvent>) -> Result<usize> {
-        self.append_admitted(source, events, None).await
+        self.append_with_policy(source, events, IngestionPolicy::Import, None)
+            .await
     }
 
+    /// Appends live events, charged to the caller's admission permit.
+    ///
+    /// # Errors
+    /// Fails for events older than retention, exhausted admission or byte budgets,
+    /// unavailable storage, or preparation or commit failures.
     pub async fn append_with_permit(
         &self,
         source: String,
         events: Vec<NormalizedEvent>,
-        permit: tokio::sync::OwnedSemaphorePermit,
+        permit: OwnedSemaphorePermit,
     ) -> Result<usize> {
-        self.append_admitted(source, events, Some(permit)).await
+        self.append_with_policy(source, events, IngestionPolicy::Live, Some(permit))
+            .await
     }
 
-    async fn append_admitted(
+    /// Appends events under `policy`, with an optional admission permit.
+    ///
+    /// # Errors
+    /// Fails when the policy rejects an event, admission or byte budgets are exhausted,
+    /// storage is unavailable, or preparation or commit cannot complete.
+    pub async fn append_with_policy(
         &self,
         source: String,
         events: Vec<NormalizedEvent>,
-        request_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+        policy: IngestionPolicy,
+        request_permit: Option<OwnedSemaphorePermit>,
     ) -> Result<usize> {
-        if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
-        }
-
-        if self.inner.quota.blocked.load(Ordering::Acquire) {
-            return Err(quota::size_error());
-        }
-
-        // Queue one serialized attributes value instead of retaining both the
-        // JSON tree and the string consumed by the native appender.
-        let events: Vec<_> = events
-            .into_iter()
-            .map(|mut event| {
-                let attributes = event.attributes.to_string();
-                event.attributes = serde_json::Value::Null;
-                QueuedEvent { event, attributes }
-            })
-            .collect();
-        let size = events
-            .iter()
-            .map(|e| {
-                e.event.message.len()
-                    + e.attributes.len()
-                    + e.event.service.as_ref().map_or(0, String::len)
-                    + e.event.logger.as_ref().map_or(0, String::len)
-                    + e.event.host.as_ref().map_or(0, String::len)
-                    + 256
-            })
-            .sum::<usize>();
-
-        let permits = u32::try_from(size.max(1))
-            .map_err(|_| Error::new(ErrorKind::TooLarge, "batch too large"))?;
-        let permit = self
-            .inner
-            .bytes
-            .clone()
-            .try_acquire_many_owned(permits)
-            .map_err(|_| Error::new(ErrorKind::Overloaded, "storage byte budget exhausted"))?;
-        let (tx, rx) = oneshot::channel();
-        self.inner
-            .writer
-            .try_send(Write::Append(source, events, tx, permit, request_permit))
-            .map_err(queue_error)?;
-        rx.await.map_err(db_error)?
-    }
-
-    async fn query(&self, query: Query, operation: Operation) -> Result<Answer> {
-        self.query_bounded(query, operation, None).await
-    }
-
-    async fn query_bounded(
-        &self,
-        query: Query,
-        operation: Operation,
-        max_bytes: Option<usize>,
-    ) -> Result<Answer> {
-        if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
-        }
-
-        let id = self.inner.next.fetch_add(1, Ordering::Relaxed);
-        let index = self
-            .inner
-            .readers
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, reader)| reader.capacity())
-            .map(|(index, _)| index)
-            .unwrap();
-        let (tx, rx) = oneshot::channel();
-        let cancelled = Arc::new(AtomicBool::new(false));
-        self.inner.readers[index]
-            .try_send(Read {
-                id,
-                query: Some(query),
-                operation,
-                reply: tx,
-                cancelled: cancelled.clone(),
-                deadline: Instant::now() + self.inner.timeout,
-                max_bytes: max_bytes
-                    .unwrap_or(self.inner.max_result_bytes)
-                    .min(self.inner.max_result_bytes),
-            })
-            .map_err(queue_error)?;
-
-        // Dropping the caller's future also cancels its queued or active query.
-        let _cancellation = Cancellation {
-            cancelled: cancelled.clone(),
-            interrupt: {
-                let interrupts = self.inner.interrupts.clone();
-                Arc::new(move |id| {
-                    for interrupt in &interrupts {
-                        interrupt(id);
-                    }
-                })
+        self.append_admitted(
+            source,
+            events,
+            request_permit,
+            AppendOptions {
+                policy,
+                lane: AppendLane::Direct,
+                validation: None,
+                preparation_wait: None,
             },
-            id,
-        };
-
-        match tokio::time::timeout(self.inner.timeout, rx).await {
-            Ok(reply) => {
-                let answer = reply.map_err(db_error)??;
-                let mut budget = ResultBudget {
-                    remaining: self.inner.max_result_bytes,
-                    deadline: None,
-                    cancelled: None,
-                };
-                serde_json::to_writer(&mut budget, &answer).map_err(|_| {
-                    Error::new(ErrorKind::TooLarge, "query response exceeds byte budget")
-                })?;
-
-                Ok(answer)
-            }
-
-            Err(_) => {
-                self.inner.metrics.timeouts.fetch_add(1, Ordering::Relaxed);
-                cancelled.store(true, Ordering::Release);
-
-                for interrupt in &self.inner.interrupts {
-                    interrupt(id);
-                }
-
-                Err(Error::new(
-                    ErrorKind::Timeout,
-                    "query deadline exceeded; reader remains occupied until completion",
-                ))
-            }
-        }
+        )
+        .await
     }
 
+    pub(crate) async fn append_validated_live(
+        &self,
+        source: String,
+        events: Vec<NormalizedEvent>,
+        permit: OwnedSemaphorePermit,
+        validation: crate::ingestion::LiveValidation,
+        lane: AppendLane,
+        preparation_wait: Option<Duration>,
+    ) -> Result<usize> {
+        self.append_admitted(
+            source,
+            events,
+            Some(permit),
+            AppendOptions {
+                policy: IngestionPolicy::Live,
+                lane,
+                validation: Some(validation),
+                preparation_wait,
+            },
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    async fn append_forward(
+        &self,
+        source: String,
+        events: Vec<NormalizedEvent>,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<usize> {
+        self.append_admitted(
+            source,
+            events,
+            Some(permit),
+            AppendOptions {
+                policy: IngestionPolicy::Live,
+                lane: AppendLane::Forward,
+                validation: None,
+                preparation_wait: None,
+            },
+        )
+        .await
+    }
+
+    /// Returns up to `limit` events from `sources` after an optional cursor.
+    ///
+    /// # Errors
+    /// Fails for invalid or expired cursors, unavailable storage, query deadlines,
+    /// integrity failures, or results that exceed the configured byte budget.
     pub async fn tail(
         &self,
         after_id: Option<String>,
         sources: Vec<String>,
         limit: usize,
     ) -> Result<SearchResult> {
-        let after = after_id
-            .map(|s| {
-                s.parse::<i64>()
-                    .map_err(|_| Error::invalid("invalid tail cursor"))
-            })
-            .transpose()?;
         let q = Query {
             from: i64::MIN,
             to: i64::MAX,
@@ -1437,34 +866,68 @@ impl Storage {
             limit,
             ..Query::default()
         };
+        self.tail_filtered(after_id, q).await
+    }
 
-        match self.query(q, Operation::Tail(after, 0)).await? {
-            Answer::Search(v) => Ok(v),
-            _ => unreachable!(),
+    /// Inspect actual coverage through the bounded reader and archive integrity path.
+    ///
+    /// # Errors
+    /// Fails if storage is unavailable, the read exceeds its deadline or byte budget,
+    /// or durable data fails integrity checks.
+    pub async fn projection_status(&self) -> Result<ProjectionStatus> {
+        let query = Query {
+            from: i64::MIN,
+            to: i64::MAX,
+            limit: 1,
+            ..Query::default()
+        };
+        match self.query(query, Operation::ProjectionStatus).await? {
+            Answer::ProjectionStatus(status) => Ok(status),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Returns one page of events matching `q`.
+    ///
+    /// # Errors
+    /// Fails for invalid queries or cursors, unavailable storage, query deadlines,
+    /// integrity failures, or results that exceed the configured byte budget.
     pub async fn search(&self, q: Query) -> Result<SearchResult> {
         match self.query(q, Operation::Search).await? {
             Answer::Search(v) => Ok(v),
-            _ => unreachable!(),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Counts the events matching `q`.
+    ///
+    /// # Errors
+    /// Fails for invalid queries, unavailable storage, query deadlines, integrity
+    /// failures, or results that exceed the configured byte budget.
     pub async fn count(&self, q: Query) -> Result<u64> {
         match self.query(q, Operation::Count).await? {
             Answer::Count(v) => Ok(v),
-            _ => unreachable!(),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Returns facet counts for the events matching `q`.
+    ///
+    /// # Errors
+    /// Fails for invalid queries, unavailable storage, query deadlines, integrity
+    /// failures, or results that exceed the configured byte budget.
     pub async fn facets(&self, q: Query) -> Result<Facets> {
         match self.query(q, Operation::Facets).await? {
             Answer::Facets(v) => Ok(v),
-            _ => unreachable!(),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Returns event counts per `interval_ms` bucket, which must be positive.
+    ///
+    /// # Errors
+    /// Fails for invalid queries or bucket intervals, unavailable storage, query
+    /// deadlines, integrity failures, or results that exceed the configured byte budget.
     pub async fn histogram(&self, q: Query, interval_ms: i64) -> Result<Vec<HistogramBucket>> {
         if interval_ms <= 0 {
             return Err(Error::invalid("interval must be positive"));
@@ -1472,13 +935,18 @@ impl Storage {
 
         match self.query(q, Operation::Histogram(interval_ms)).await? {
             Answer::Histogram(v) => Ok(v),
-            _ => unreachable!(),
+            _ => unreachable!("query answer matches its operation"),
         }
     }
 
+    /// Exports events before `before` (Unix milliseconds) and returns the exported count.
+    ///
+    /// # Errors
+    /// Fails if storage or its maintenance queue is unavailable, the operation exceeds
+    /// its deadline or disk budget, or archive export or publication fails.
     pub async fn archive(&self, before: i64) -> Result<usize> {
         if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
+            return Err(storage_unavailable());
         }
 
         let (tx, rx) = oneshot::channel();
@@ -1489,9 +957,14 @@ impl Storage {
         rx.await.map_err(db_error)?
     }
 
+    /// Expires the oldest data until the index is back under its size target.
+    ///
+    /// # Errors
+    /// Fails if storage or its maintenance queue is unavailable, the operation exceeds
+    /// its deadline, or no safe disk reclaim can meet the size target.
     pub async fn enforce_size_limit(&self) -> Result<usize> {
         if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
+            return Err(storage_unavailable());
         }
 
         let (reply, answer) = oneshot::channel();
@@ -1502,9 +975,14 @@ impl Storage {
         answer.await.map_err(db_error)?
     }
 
+    /// Merges small archive files and returns the merged row count.
+    ///
+    /// # Errors
+    /// Fails if storage or its maintenance queue is unavailable, the operation exceeds
+    /// its deadline or disk budget, or archive validation or publication fails.
     pub async fn compact(&self) -> Result<usize> {
         if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
+            return Err(storage_unavailable());
         }
 
         let (tx, rx) = oneshot::channel();
@@ -1515,9 +993,14 @@ impl Storage {
         rx.await.map_err(db_error)?
     }
 
+    /// Removes hot events before `before` (Unix milliseconds) and returns the removed count.
+    ///
+    /// # Errors
+    /// Fails if storage or its maintenance queue is unavailable, the operation exceeds
+    /// its deadline, or retained data cannot be validated or deleted.
     pub async fn retain(&self, before: i64) -> Result<usize> {
         if !self.is_ready() {
-            return Err(Error::unavailable("storage unavailable"));
+            return Err(storage_unavailable());
         }
 
         let (tx, rx) = oneshot::channel();
@@ -1530,23 +1013,32 @@ impl Storage {
 
     /// Old cloned handles may call shutdown during index deletion. Serialize the
     /// owned drain and cache its outcome so cancellation cannot orphan workers.
+    ///
+    /// # Errors
+    /// Fails when a worker closes unexpectedly, checkpointing fails, or an owned
+    /// worker or shutdown task panics.
+    ///
+    /// # Panics
+    /// Panics if an admission or maintenance interruption-state lock is poisoned.
     pub async fn shutdown(&self) -> Result<()> {
         self.stop_admission();
-        let mut shutdown = self.inner.shutdown.clone().lock_owned().await;
+
+        let mut shutdown = Arc::clone(&self.inner.shutdown).lock_owned().await;
         let storage = self.clone();
         tokio::spawn(async move {
             if shutdown.is_none() {
                 *shutdown = Some(storage.shutdown_workers().await);
             }
+
             shutdown
                 .as_ref()
                 .expect("completed storage shutdown")
                 .as_ref()
                 .copied()
-                .map_err(|error| Error::new(error.kind, error.message.clone()))
+                .map_err(Clone::clone)
         })
         .await
-        .map_err(|_| Error::unavailable("storage shutdown worker failed"))?
+        .map_err(|error| Error::unavailable("storage shutdown worker failed").with_source(error))?
     }
 
     async fn shutdown_workers(&self) -> Result<()> {
@@ -1558,9 +1050,37 @@ impl Storage {
             interrupt(u64::MAX);
         }
 
-        let mut failure = None;
-        let (tx, rx) = oneshot::channel();
+        let mut failure = self.stop_maintenance().await;
+        if let Some(error) = self.stop_readers().await {
+            failure = Some(error);
+        }
 
+        // Reader stop replies are sent only after their last transaction has completed.
+        for interrupt in &self.inner.interrupts {
+            interrupt(u64::MAX);
+        }
+
+        if let Some(error) = self.stop_writer().await {
+            failure = Some(error);
+        }
+
+        let joins = std::mem::take(&mut *self.inner.joins.lock().unwrap());
+        tokio::task::spawn_blocking(move || {
+            for join in joins {
+                if join.join().is_err() {
+                    failure = Some(Error::unavailable("database worker panicked"));
+                }
+            }
+
+            failure.map_or(Ok(()), Err)
+        })
+        .await
+        .map_err(db_error)?
+    }
+
+    /// Stops the maintenance worker after its queued commands. Returns the failure, if any.
+    async fn stop_maintenance(&self) -> Option<Error> {
+        let (tx, rx) = oneshot::channel();
         if self
             .inner
             .maintenance
@@ -1568,16 +1088,17 @@ impl Storage {
             .await
             .is_ok()
         {
-            if let Err(e) = rx.await {
-                failure = Some(db_error(e));
-            }
+            rx.await.err().map(db_error)
         } else {
-            failure = Some(Error::unavailable("maintenance worker closed"));
+            Some(Error::unavailable("maintenance worker closed"))
         }
+    }
 
+    /// Stops every reader, waiting for each stop reply. Returns the last failure, if any.
+    async fn stop_readers(&self) -> Option<Error> {
+        let mut failure = None;
         for reader in &self.inner.readers {
             let (tx, stopped) = oneshot::channel();
-
             if reader
                 .send(Read {
                     id: 0,
@@ -1597,130 +1118,22 @@ impl Storage {
             }
         }
 
-        // Reader stop replies are sent only after their last transaction has completed.
-        for interrupt in &self.inner.interrupts {
-            interrupt(u64::MAX);
-        }
+        failure
+    }
 
+    /// Stops the writer after its queued commands and checkpoint. Returns the failure, if any.
+    async fn stop_writer(&self) -> Option<Error> {
         let (tx, rx) = oneshot::channel();
-
         if self.inner.writer.send(Write::Stop(tx)).await.is_ok() {
             match rx.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => failure = Some(e),
-                Err(e) => failure = Some(db_error(e)),
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e),
+                Err(e) => Some(db_error(e)),
             }
         } else {
-            failure = Some(Error::unavailable("writer closed"));
-        }
-
-        let joins = std::mem::take(&mut *self.inner.joins.lock().unwrap());
-        tokio::task::spawn_blocking(move || {
-            for join in joins {
-                if join.join().is_err() {
-                    failure = Some(Error::unavailable("database worker panicked"));
-                }
-            }
-
-            failure.map_or(Ok(()), Err)
-        })
-        .await
-        .map_err(db_error)?
-    }
-}
-
-fn quote(s: &str) -> String {
-    s.replace('\'', "''")
-}
-
-fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
-#[cfg(test)]
-fn append(conn: &mut Connection, source: &str, events: &[NormalizedEvent]) -> Result<usize> {
-    let queued: Vec<_> = events
-        .iter()
-        .cloned()
-        .map(|event| QueuedEvent {
-            attributes: event.attributes.to_string(),
-            event,
-        })
-        .collect();
-    append_queued(conn, source, &queued, false)
-}
-
-fn append_queued(
-    conn: &mut Connection,
-    source: &str,
-    events: &[QueuedEvent],
-    live: bool,
-) -> Result<usize> {
-    let tx = conn.transaction().map_err(db_error)?;
-
-    if live {
-        let cutoff: i64 = tx
-            .query_row(
-                "SELECT before_time FROM retention_state WHERE singleton=1",
-                [],
-                |r| r.get(0),
-            )
-            .map_err(db_error)?;
-
-        if events.iter().any(|event| event.event.event_time < cutoff) {
-            return Err(Error::invalid(
-                "event timestamp expired by current retention",
-            ));
+            Some(writer_closed())
         }
     }
-
-    let next: i64 = tx
-        .query_row(
-            "SELECT next_id FROM ingest_state WHERE singleton=1",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(db_error)?;
-
-    // Flush and drop the appender before updating the sequence and committing;
-    // acknowledgements and counters are published only after this succeeds.
-    {
-        let mut app = tx.appender("events").map_err(db_error)?;
-        let received = now();
-
-        for (offset, queued) in events.iter().enumerate() {
-            let event = &queued.event;
-            app.append_row(params![
-                next + offset as i64,
-                source,
-                event.event_time,
-                received,
-                event.level,
-                event.service,
-                event.logger,
-                event.host,
-                event.pid,
-                event.message,
-                queued.attributes
-            ])
-            .map_err(db_error)?;
-        }
-
-        app.flush().map_err(db_error)?;
-    }
-
-    tx.execute(
-        "UPDATE ingest_state SET next_id=? WHERE singleton=1",
-        params![next + events.len() as i64],
-    )
-    .map_err(db_error)?;
-
-    tx.commit().map_err(db_error)?;
-
-    Ok(events.len())
 }
 
 #[cfg(test)]

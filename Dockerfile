@@ -1,5 +1,5 @@
-# syntax=docker/dockerfile:1
-FROM rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS backend
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS backend
 ARG TARGETARCH
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml clippy.toml ./
@@ -24,7 +24,7 @@ RUN strip --strip-unneeded /usr/local/bin/logbrook \
     && mkdir /runtime-data && chown 10001:10001 /runtime-data
 
 # cc supplies the glibc/C++ runtime required by bundled DuckDB, plus CA roots.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:e792ab3d241a468a4fd7519ddbbebe66b49b5f365771716ea688ad40b6c6f1c2 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS runtime
 ARG VCS_REF=unknown
 ARG VERSION=0.1.0
 LABEL org.opencontainers.image.title="logbrook" \
@@ -38,7 +38,7 @@ COPY --from=backend /build/THIRD_PARTY_NOTICES.txt /usr/share/licenses/logbrook/
 COPY --from=verified --chown=10001:10001 /runtime-data /data
 USER 10001:10001
 ENV LOGBROOK_BIND=0.0.0.0:3100 LOGBROOK_DATA_DIR=/data
-EXPOSE 3100
+EXPOSE 3100 24224/tcp 24224/udp
 VOLUME ["/data"]
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD ["/usr/local/bin/logbrook", "healthcheck"]

@@ -1,4 +1,5 @@
 //! Real HTTP regressions exercise the wire format, bounded body reads and accounting.
+
 use super::{http::Http, index, mixed};
 use serde_json::{Value, json};
 use std::sync::{
@@ -20,6 +21,7 @@ struct Server {
     task: JoinHandle<()>,
     connections: Arc<AtomicU64>,
 }
+
 impl Drop for Server {
     fn drop(&mut self) {
         self.task.abort();
@@ -33,10 +35,12 @@ async fn line(socket: &mut TcpStream) -> Option<String> {
         if socket.read_exact(&mut byte).await.is_err() {
             return None;
         }
+
         bytes.push(byte[0]);
         if bytes.ends_with(b"\r\n") {
             return String::from_utf8(bytes).ok();
         }
+
         if bytes.len() > 65536 {
             return None;
         }
@@ -58,6 +62,7 @@ async fn fixture(truncated: bool) -> Server {
                 break;
             };
             accepted.fetch_add(1, Ordering::Relaxed);
+
             let seen = seen.clone();
             let broadcast = broadcast.clone();
             let records = records.clone();
@@ -68,8 +73,10 @@ async fn fixture(truncated: bool) -> Server {
                         if header == "\r\n" {
                             break;
                         }
+
                         headers.push_str(&header);
                     }
+
                     let length = headers
                         .lines()
                         .find_map(|h| {
@@ -83,6 +90,7 @@ async fn fixture(truncated: bool) -> Server {
                     if socket.read_exact(&mut body).await.is_err() {
                         break;
                     }
+
                     if headers
                         .to_lowercase()
                         .contains("transfer-encoding: chunked")
@@ -98,22 +106,31 @@ async fn fixture(truncated: bool) -> Server {
                                 let _ = line(&mut socket).await;
                                 break;
                             }
+
                             let mut bytes = vec![0; size];
                             if socket.read_exact(&mut bytes).await.is_err() {
                                 return;
                             }
+
                             body.extend(bytes);
                             let _ = line(&mut socket).await;
                         }
                     }
+
                     let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
                     seen.lock()
                         .await
                         .push((first.clone(), headers.clone(), body.clone()));
                     if path == "/redirect" {
-                        let _=socket.write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /logs/ingest\r\nContent-Length: 2\r\n\r\n{}").await;
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 307 Temporary Redirect\r\nLocation: \
+                                    /logs/ingest\r\nContent-Length: 2\r\n\r\n{}",
+                            )
+                            .await;
                         continue;
                     }
+
                     if path.contains("/logs/tail") {
                         let index = path
                             .split('/')
@@ -122,27 +139,53 @@ async fn fixture(truncated: bool) -> Server {
                             .unwrap_or("default")
                             .to_string();
                         let mut changes = broadcast.subscribe();
-                        let _=socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await;
+
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: \
+                                    text/event-stream\r\nConnection: \
+                                    close\r\n\r\n",
+                            )
+                            .await;
+
+                        let checkpoint = format!(
+                            "event: cursor\nid: \
+                                {index}:v1.synthetic-checkpoint\ndata: caught up\n\n"
+                        );
+                        if socket.write_all(checkpoint.as_bytes()).await.is_err() {
+                            break;
+                        }
+
                         while let Ok((event_index, event)) = changes.recv().await {
                             if event_index != index {
                                 continue;
                             }
+
                             let id = event["id"].as_str().unwrap();
-                            let frame = format!("event: log\nid: {index}:{id}\ndata: {event}\n\n");
+                            let frame = format!(
+                                "event: log\nid: {index}:v1.synthetic-{id}\ndata: {event}\n\n"
+                            );
                             if socket.write_all(frame.as_bytes()).await.is_err() {
                                 break;
                             }
                         }
+
                         break;
                     }
+
                     if truncated && path != "/metrics" && path != "/ready" {
                         let _ = socket
                             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{")
                             .await;
                         break;
                     }
+
                     let text = if path == "/metrics" {
-                        "logbrook_storage_archive_files{index=\"default\"} 0\nlogbrook_storage_wal_bytes{index=\"default\"} 100\nlogbrook_test{index=\"payments\"} 0\nlogbrook_test{index=\"orders\"} 0\n".to_string()
+                        "logbrook_storage_archive_files{index=\"default\"} \
+                            0\nlogbrook_storage_wal_bytes{index=\"default\"} \
+                            100\nlogbrook_test{index=\"payments\"} \
+                            0\nlogbrook_test{index=\"orders\"} 0\n"
+                            .to_string()
                     } else if first.starts_with("POST") {
                         let events: Vec<Value> =
                             if headers.to_lowercase().contains("application/x-ndjson") {
@@ -154,6 +197,7 @@ async fn fixture(truncated: bool) -> Server {
                                 serde_json::from_slice(&body).unwrap()
                             };
                         let count = events.len();
+
                         let mut records = records.lock().await;
                         let index = path
                             .split('/')
@@ -163,11 +207,22 @@ async fn fixture(truncated: bool) -> Server {
                             .to_string();
                         for event in events {
                             let id = records.len() + 1;
-                            records.push(json!({"id":id.to_string(),"event_time":event["time"],"message":event["msg"],"service":event["service"],"level":event["level"],"fixture_index":index}));
+                            records.push(json!({
+                                "id": id.to_string(),
+                                "event_time": event["time"],
+                                "message": event["msg"],
+                                "service": event["service"],
+                                "level": event["level"],
+                                "fixture_index": index,
+                            }));
                             let _ =
                                 broadcast.send((index.clone(), records.last().unwrap().clone()));
                         }
-                        json!({"accepted":count}).to_string()
+
+                        json!({
+                            "accepted": count,
+                        })
+                        .to_string()
                     } else {
                         let url = reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
                         let p = url
@@ -208,12 +263,24 @@ async fn fixture(truncated: bool) -> Server {
                             .cloned()
                             .collect();
                         if url.path().ends_with("/count") {
-                            json!({"count":rows.len()}).to_string()
+                            json!({
+                                "count": rows.len(),
+                            })
+                            .to_string()
                         } else if url.path().ends_with("/facets") {
-                            json!({"services":[],"hosts":[],"loggers":[],"sources":[],"levels":[]})
-                                .to_string()
+                            json!({
+                                "services": [],
+                                "hosts": [],
+                                "loggers": [],
+                                "sources": [],
+                                "levels": [],
+                            })
+                            .to_string()
                         } else if url.path().ends_with("/histogram") {
-                            json!({"buckets":[]}).to_string()
+                            json!({
+                                "buckets": [],
+                            })
+                            .to_string()
                         } else {
                             rows.sort_by_key(|r| {
                                 std::cmp::Reverse((
@@ -221,14 +288,20 @@ async fn fixture(truncated: bool) -> Server {
                                     r["id"].as_str().unwrap().parse::<u64>().unwrap(),
                                 ))
                             });
+
                             rows.truncate(
                                 p.get("limit").and_then(|v| v.parse().ok()).unwrap_or(100),
                             );
-                            json!({"events":rows,"next_cursor":null}).to_string()
+                            json!({
+                                "events": rows,
+                                "next_cursor": null,
+                            })
+                            .to_string()
                         }
                     };
                     let wire = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{text}",
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: \
+                            application/json\r\n\r\n{text}",
                         text.len()
                     );
                     if socket.write_all(wire.as_bytes()).await.is_err() {
@@ -272,6 +345,7 @@ async fn real_http_mixed_shapes_final_accounting_and_cleanup() {
     assert_eq!(report["accounting"]["sent_query"], 6);
     assert_eq!(report["expected_visibility"]["exact"], true);
     assert_eq!(report["latency_ms"]["ingest"]["samples"], 3);
+
     let requests = server.requests.lock().await;
     let writes: Vec<_> = requests
         .iter()
@@ -336,6 +410,7 @@ async fn truncated_responses_account_all_units_without_worker_death() {
     assert_eq!(report["counts"]["ambiguous_ingest_events"], 6);
     assert_eq!(report["counts"]["query_failed_units"], 6);
     assert_eq!(report["verification_errors"].as_array().unwrap().len(), 4);
+
     assert_eq!(
         server
             .requests
@@ -355,6 +430,7 @@ async fn http_pool_reuses_active_connections_and_ignores_redirects() {
     for _ in 0..2 {
         assert_eq!(http.request("/metrics", None, true).await.0, 200);
     }
+
     assert_eq!(server.requests.lock().await.len(), 2);
     assert_eq!(server.connections.load(Ordering::Relaxed), 1);
     assert_eq!(

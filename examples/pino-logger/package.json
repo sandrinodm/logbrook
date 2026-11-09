@@ -19,6 +19,9 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "prettier": "3.9.9"
+    "prettier": "3.9.10"
+  },
+  "overrides": {
+    "thread-stream": "4.2.0"
   }
 }

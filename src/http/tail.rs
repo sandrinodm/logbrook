@@ -1,258 +1,298 @@
-use super::*;
+//! Live tail over Server-Sent Events: replays retained history from `Last-Event-ID`, then follows
+//! new commits, bounded by a per-subscriber byte budget.
+
+use super::{
+    App, Arc, Duration, Error, ErrorKind, Extension, HeaderMap, IntoResponse, KeepAlive, Ordering,
+    OwnedSemaphorePermit, Params, Query, QueryRejection, Response, Sse, SseEvent, filters,
+    overload, query_error, query_params,
+};
+
+use crate::{
+    model::SearchResult,
+    query_cursor::{TailCursor, decode_tail},
+};
+use std::collections::VecDeque;
+use tokio::sync::watch;
+
+/// Bytes an SSE frame adds besides its event name, id and data: `event: ` with its line break,
+/// `data: ` with its line break, and the blank line that ends the frame.
+const SSE_FRAME_OVERHEAD_BYTES: usize = 16;
+
+/// Bytes an SSE id line adds besides the id: `id: ` and its line break.
+const SSE_ID_OVERHEAD_BYTES: usize = 5;
+
+/// Bytes each embedded line break in the data adds: a new `data: ` prefix on the continuation line.
+const SSE_CONTINUATION_LINE_BYTES: usize = 6;
+
+/// Panic message for a cursor the query already validated. Encoding it again cannot fail.
+const VALIDATED_CURSOR: &str = "validated query cursor";
 
 fn tail_cursor_expired(error: &Error) -> bool {
     error.kind == ErrorKind::CursorExpired
 }
 
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub(super) struct TailFilters {
-    source: Option<String>,
-    service: Option<String>,
-    logger: Option<String>,
-    host: Option<String>,
-    message: Option<String>,
-    min_level: Option<i32>,
+/// The bytes one SSE frame occupies on the wire, so the byte budget bounds the real output.
+///
+/// axum writes `event: <event>`, an optional `id: <id>`, one `data:` line per line of data, and a
+/// blank line. JSON log data has no literal newlines, but the count stays correct if it does.
+fn frame_bytes(event: &str, id: Option<&str>, data: &str) -> usize {
+    let line_breaks = data
+        .bytes()
+        .filter(|byte| matches!(byte, b'\r' | b'\n'))
+        .count();
+    event.len()
+        + SSE_FRAME_OVERHEAD_BYTES
+        + id.map_or(0, |id| id.len() + SSE_ID_OVERHEAD_BYTES)
+        + data.len()
+        + line_breaks * SSE_CONTINUATION_LINE_BYTES
 }
 
+/// The final frame of a stream that cannot continue. It names the recovery the client should use.
+fn terminal_frame(error: &Error, budget: usize) -> SseEvent {
+    let gap = tail_cursor_expired(error) || error.kind == ErrorKind::TooLarge;
+    let kind = if gap { "gap" } else { "error" };
+    let message = if tail_cursor_expired(error) {
+        "tail cursor expired by retention; search retained history before reconnecting"
+    } else if error.kind == ErrorKind::TooLarge {
+        "subscriber output byte budget exceeded; search retained history before reconnecting"
+    } else {
+        "tail query failed; reconnect or search retained history"
+    };
+    let end = message
+        .len()
+        .min(budget.saturating_sub(frame_bytes(kind, None, "")));
+    SseEvent::default().event(kind).data(&message[..end])
+}
+
+/// The position a reconnecting client asks to resume from.
+fn last_event_id(headers: &HeaderMap) -> Result<Option<String>, Error> {
+    headers
+        .get("last-event-id")
+        .map(|value| value.to_str().map(str::to_owned))
+        .transpose()
+        .map_err(|error| Error::invalid("invalid Last-Event-ID").with_source(error))
+}
+
+/// Streams matching events as Server-Sent Events.
+///
+/// # Errors
+///
+/// Fails before the stream starts when the filters or `Last-Event-ID` are invalid, the byte
+/// budget cannot hold a frame, or the subscriber limit is reached.
 pub(super) async fn tail(
     Extension(app): Extension<App>,
     headers: HeaderMap,
-    filters: Result<Params<TailFilters>, axum::extract::rejection::QueryRejection>,
+    filters: Result<Params<filters::TailFilters>, QueryRejection>,
 ) -> Result<Response, Error> {
-    let Params(filters) = filters.map_err(|error| Error::invalid(error.body_text()))?;
-    let allowed = scopes(&app, &headers)?;
-    let sources: Vec<String> = filters
-        .source
-        .map(|v| v.split(',').map(str::to_owned).collect())
-        .unwrap_or_else(|| allowed.clone());
+    let query = filters::common_query(&app, &headers, query_params(filters)?.into())?;
+    let after = last_event_id(&headers)?;
+    // Decode before reserving subscriber or storage capacity. The storage boundary
+    // repeats this validation for direct callers.
+    if let Some(cursor) = &after {
+        decode_tail(&query, cursor)?;
+    }
 
-    if sources.len() > 128
-        || sources.iter().any(|source| {
-            crate::config::validate_source(source).is_err()
-                || (!allowed.is_empty() && !allowed.contains(source))
-        })
-    {
+    if app.config.max_tail_buffer_bytes < frame_bytes("error", None, "") {
         return Err(Error::new(
-            ErrorKind::Forbidden,
-            "source outside read scope",
+            ErrorKind::TooLarge,
+            "tail byte budget is too small",
         ));
     }
 
-    for field in [
-        &filters.service,
-        &filters.logger,
-        &filters.host,
-        &filters.message,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if field.len() > app.config.max_field_bytes {
-            return Err(Error::invalid("query field exceeds limit"));
-        }
-    }
-
-    if filters.min_level.is_some_and(|v| v < 0) {
-        return Err(Error::invalid("min_level must be nonnegative"));
-    }
-
-    let permit = app
-        .tails
-        .clone()
+    let permit = Arc::clone(&app.tails)
         .try_acquire_owned()
-        .map_err(|_| overload(&app, "tail_subscribers", "tail subscriber limit exhausted"))?;
-    let after = headers
-        .get("last-event-id")
-        .map(|v| v.to_str().map(str::to_owned))
-        .transpose()
-        .map_err(|_| Error::invalid("invalid Last-Event-ID"))?;
-    let after = after
-        .map(|cursor| decode_cursor(&app, &cursor))
-        .transpose()?;
+        .map_err(|error| {
+            overload(&app, "tail_subscribers", "tail subscriber limit exhausted").with_source(error)
+        })?;
 
-    if after
-        .as_ref()
-        .is_some_and(|v| v.len() > 20 || v.parse::<u64>().is_err())
-    {
-        return Err(Error::invalid("Last-Event-ID must be numeric"));
-    }
-
-    let query = Query {
-        from: 0,
-        to: 253_402_300_799_999,
-        sources,
-        service: filters.service,
-        logger: filters.logger,
-        host: filters.host,
-        message: filters.message,
-        min_level: filters.min_level,
-        limit: app.config.max_page_size,
-        cursor: None,
-    };
+    let cursor_codec = TailCursor::new(&query)?;
     let commits = app.storage.subscribe_commits();
     let first = app
         .storage
-        .tail_filtered_bounded_with_overhead(
-            after,
-            query.clone(),
-            app.config.max_tail_buffer_bytes,
-            app.index.as_ref().map_or(0, |name| name.len() + 1),
-        )
+        .tail_filtered_bounded(after, query.clone(), app.config.max_tail_buffer_bytes)
         .await
         .map_err(|e| query_error(&app, e));
-
     if let Err(error) = &first
         && !tail_cursor_expired(error)
     {
-        return Err(Error::new(error.kind, error.message.clone()));
+        return Err(error.clone());
     }
 
+    let state = TailStream {
+        app,
+        query,
+        cursor_codec,
+        result: first,
+        _permit: permit,
+        pending: VecDeque::new(),
+        ended: false,
+        wait: false,
+        fetch: false,
+        commits,
+    };
     // Pull one bounded page at a time. A full replay page is drained immediately;
     // downstream demand is the backpressure signal and no backlog size implies loss.
-    let stream = futures_util::stream::unfold(
-        (
-            app,
-            query,
-            first,
-            permit,
-            std::collections::VecDeque::new(),
-            false,
-            false,
-            false,
-            commits,
-        ),
-        |(
-            app,
-            query,
-            mut result,
-            permit,
-            mut pending,
-            mut ended,
-            mut wait,
-            mut fetch,
-            mut commits,
-        )| async move {
-            if ended && pending.is_empty() {
-                return None;
-            }
-
-            if pending.is_empty() {
-                if wait {
-                    tokio::select! {
-                        _ = commits.changed() => {},
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(app.config.tail_poll_ms)) => {},
-                    }
-
-                    if !app.storage.is_ready() {
-                        return None;
-                    }
-                }
-
-                if fetch {
-                    let cursor = result.as_ref().ok().and_then(|p| p.next_cursor.clone());
-                    result = app
-                        .storage
-                        .tail_filtered_bounded_with_overhead(
-                            cursor,
-                            query.clone(),
-                            app.config.max_tail_buffer_bytes,
-                            app.index.as_ref().map_or(0, |name| name.len() + 1),
-                        )
-                        .await;
-                }
-
-                match result {
-                    Err(error) => {
-                        ended = true;
-
-                        if tail_cursor_expired(&error) || error.kind == ErrorKind::TooLarge {
-                            app.tail_gaps.fetch_add(1, Ordering::Relaxed);
-                        }
-
-                        pending.push_back(
-                            SseEvent::default()
-                                .event(
-                                    if tail_cursor_expired(&error)
-                                        || error.kind == ErrorKind::TooLarge
-                                    {
-                                        "gap"
-                                    } else {
-                                        "error"
-                                    },
-                                )
-                                .data(error.message),
-                        );
-                        result = Ok(crate::model::SearchResult {
-                            events: vec![],
-                            next_cursor: None,
-                        });
-                    }
-
-                    Ok(ref page) => {
-                        let mut bytes = 0usize;
-
-                        for event in &page.events {
-                            let data = serde_json::to_string(event).expect("event serialization");
-                            bytes = bytes.saturating_add(
-                                data.len()
-                                    + event.id.len()
-                                    + 32
-                                    + app.index.as_ref().map_or(0, |name| name.len() + 1),
-                            );
-
-                            if bytes > app.config.max_tail_buffer_bytes {
-                                ended = true;
-                                app.tail_gaps.fetch_add(1, Ordering::Relaxed);
-                                pending.clear();
-                                pending.push_back(SseEvent::default().event("gap").data(
-                                    "subscriber output byte budget exceeded; \
-                         search retained history before reconnecting",
-                                ));
-                                break;
-                            }
-
-                            pending.push_back(
-                                SseEvent::default()
-                                    .event("log")
-                                    .id(encode_cursor(&app, &event.id))
-                                    .data(data),
-                            );
-                        }
-
-                        wait = page.events.is_empty();
-                        let cursor = page.next_cursor.clone();
-
-                        if pending.is_empty() {
-                            pending.push_back(
-                                SseEvent::default()
-                                    .event("cursor")
-                                    .id(encode_cursor(&app, cursor.as_deref().unwrap_or("0")))
-                                    .data("caught up"),
-                            );
-                        }
-
-                        // Fetch only after the current page's frames have been consumed.
-                    }
-                }
-            }
-
-            let next = pending.pop_front().expect("SSE frame");
-
-            if pending.is_empty() && !ended {
-                fetch = true;
-            }
-
-            Some((
-                Ok::<_, std::convert::Infallible>(next),
-                (
-                    app, query, result, permit, pending, ended, wait, fetch, commits,
-                ),
-            ))
-        },
-    );
-
+    let stream = futures_util::stream::unfold(state, |mut state| async move {
+        let frame = state.next_frame().await?;
+        Some((Ok::<_, std::convert::Infallible>(frame), state))
+    });
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response())
+}
+
+/// The state of one live tail, advanced one SSE frame at a time.
+struct TailStream {
+    app: App,
+    query: Query,
+    cursor_codec: TailCursor,
+    /// The latest storage page. Its `next_cursor` is where the next fetch resumes.
+    result: Result<SearchResult, Error>,
+    /// Holds one tail-subscriber slot for as long as the stream lives.
+    _permit: OwnedSemaphorePermit,
+    /// Frames already decided but not yet sent.
+    pending: VecDeque<SseEvent>,
+    ended: bool,
+    /// The last page was empty, so wait for a commit before fetching again.
+    wait: bool,
+    /// Every queued frame has been sent, so the next page may be fetched.
+    fetch: bool,
+    commits: watch::Receiver<u64>,
+}
+
+impl TailStream {
+    /// The next frame, or `None` when the stream is over.
+    async fn next_frame(&mut self) -> Option<SseEvent> {
+        if self.ended && self.pending.is_empty() {
+            return None;
+        }
+
+        if self.pending.is_empty() && !self.refill().await {
+            return None;
+        }
+
+        let next = self.pending.pop_front().expect("SSE frame");
+
+        if self.pending.is_empty() && !self.ended {
+            self.fetch = true;
+        }
+
+        Some(next)
+    }
+
+    /// Queues frames for the next page, waiting for a commit or fetching first when needed.
+    /// Returns `false` when the storage is gone and the stream must end without a frame.
+    async fn refill(&mut self) -> bool {
+        if self.wait {
+            tokio::select! {
+                _ = self.commits.changed() => {},
+                _ = tokio::time::sleep(Duration::from_millis(self.app.config.tail_poll_ms)) => {},
+            }
+
+            if !self.app.storage.is_ready() {
+                return false;
+            }
+        }
+
+        if self.fetch {
+            let cursor = self
+                .result
+                .as_ref()
+                .ok()
+                .and_then(|page| page.next_cursor.clone());
+            self.result = self
+                .app
+                .storage
+                .tail_filtered_bounded(
+                    cursor,
+                    self.query.clone(),
+                    self.app.config.max_tail_buffer_bytes,
+                )
+                .await
+                .map_err(|error| query_error(&self.app, error));
+        }
+
+        let empty = SearchResult {
+            events: vec![],
+            next_cursor: None,
+        };
+        match std::mem::replace(&mut self.result, Ok(empty)) {
+            Err(error) => self.end_with_error(&error),
+            Ok(page) => {
+                self.queue_page(&page);
+                self.result = Ok(page);
+            }
+        }
+
+        true
+    }
+
+    /// Ends the stream with a gap or error frame.
+    fn end_with_error(&mut self, error: &Error) {
+        self.ended = true;
+
+        if tail_cursor_expired(error) || error.kind == ErrorKind::TooLarge {
+            self.app.tail_gaps.fetch_add(1, Ordering::Relaxed);
+        }
+
+        self.pending
+            .push_back(terminal_frame(error, self.app.config.max_tail_buffer_bytes));
+    }
+
+    /// Queues one event frame per event in the page, then a checkpoint when the page was
+    /// empty. An event that would exceed the byte budget ends the stream instead.
+    fn queue_page(&mut self, page: &SearchResult) {
+        let budget = self.app.config.max_tail_buffer_bytes;
+        let mut bytes = 0usize;
+
+        for event in &page.events {
+            let data = serde_json::to_string(event).expect("event serialization");
+            let cursor = self
+                .cursor_codec
+                .encode(event.id.parse().expect("stored event ID"))
+                .expect(VALIDATED_CURSOR);
+            bytes = bytes.saturating_add(frame_bytes("log", Some(&cursor), &data));
+
+            if bytes > budget {
+                self.ended = true;
+                self.app.tail_gaps.fetch_add(1, Ordering::Relaxed);
+                self.pending.clear();
+                self.pending.push_back(terminal_frame(
+                    &Error::new(ErrorKind::TooLarge, "tail output exceeds budget"),
+                    budget,
+                ));
+                break;
+            }
+
+            self.pending
+                .push_back(SseEvent::default().event("log").id(cursor).data(data));
+        }
+
+        self.wait = page.events.is_empty();
+
+        if self.pending.is_empty() {
+            self.queue_checkpoint(page.next_cursor.clone());
+        }
+    }
+
+    /// Queues a `caught up` cursor frame, or a gap frame when even that would not fit the budget.
+    fn queue_checkpoint(&mut self, cursor: Option<String>) {
+        let budget = self.app.config.max_tail_buffer_bytes;
+        let cursor = cursor.unwrap_or_else(|| self.cursor_codec.encode(0).expect(VALIDATED_CURSOR));
+        if frame_bytes("cursor", Some(&cursor), "caught up") > budget {
+            self.ended = true;
+            self.app.tail_gaps.fetch_add(1, Ordering::Relaxed);
+            self.pending.push_back(terminal_frame(
+                &Error::new(ErrorKind::TooLarge, "tail checkpoint exceeds budget"),
+                budget,
+            ));
+        } else {
+            self.pending.push_back(
+                SseEvent::default()
+                    .event("cursor")
+                    .id(cursor)
+                    .data("caught up"),
+            );
+        }
+    }
 }

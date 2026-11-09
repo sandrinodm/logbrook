@@ -1,3 +1,4 @@
+//! Configuration validation and serialization regression tests.
 use logbrook::config::Config;
 use std::process::Command;
 
@@ -23,7 +24,6 @@ fn every_credential_role_rejects_non_ascii_and_control_characters() {
         "synthetic-token\twith-tab".into(),
         "synthetic-token\nwith-newline".into(),
     ];
-
     for token in invalid {
         for role in ["ingest", "read", "admin"] {
             let mut config = valid();
@@ -63,7 +63,6 @@ fn malformed_configuration_never_prints_credential_keys_or_values() {
         (format!("bind = \"{secret}\"\n"), true),
         (format!("admin_tokens = [\"{secret}\"\n"), true),
     ];
-
     for (text, healthcheck_fails) in cases {
         std::fs::write(&path, &text).unwrap();
 
@@ -77,6 +76,7 @@ fn malformed_configuration_never_prints_credential_keys_or_values() {
             for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("LOGBROOK_")) {
                 process.env_remove(key);
             }
+
             let output = process
                 .args(["--config"])
                 .arg(&path)
@@ -100,7 +100,6 @@ fn malformed_configuration_never_prints_credential_keys_or_values() {
 #[test]
 fn admin_tokens_are_optional_validated_and_separate_from_other_roles() {
     let mut config = valid();
-
     assert!(config.admin_tokens.is_empty());
     config.validate().unwrap();
     config.admin_tokens = vec!["synthetic-config-admin-token".into()];
@@ -129,7 +128,6 @@ fn admin_tokens_are_optional_validated_and_separate_from_other_roles() {
         .collect::<Vec<_>>()
         .join("\n");
     let parsed: Config = toml::from_str(&without_admin).unwrap();
-
     assert!(parsed.admin_tokens.is_empty());
 }
 
@@ -199,9 +197,7 @@ fn environment_reader_requires_explicit_scope_when_configuration_has_readers() {
             .env("LOGBROOK_READ_TOKEN", "synthetic-environment-read-token");
         command
     };
-
     let rejected = command().output().unwrap();
-
     assert!(!rejected.status.success());
     assert!(rejected.stdout.is_empty());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("LOGBROOK_READ_SOURCES"));
@@ -210,7 +206,6 @@ fn environment_reader_requires_explicit_scope_when_configuration_has_readers() {
         .env("LOGBROOK_READ_SOURCES", "app")
         .output()
         .unwrap();
-
     assert!(
         accepted.status.success(),
         "{}",
@@ -256,6 +251,7 @@ fn retention_environment_overrides_toml_with_thirty_day_window() {
             .status
             .success()
     );
+
     config.retention_ms = 30 * day;
     config.archive_after_ms = 29 * day;
 
@@ -267,6 +263,7 @@ fn retention_environment_overrides_toml_with_thirty_day_window() {
             .status
             .success()
     );
+
     config.archive_after_ms = day;
     config.maintenance_interval_secs = 0;
 
@@ -292,7 +289,6 @@ fn retention_environment_rejects_invalid_numbers_and_cross_field_windows() {
                 String::from_utf8_lossy(&result.stdout),
                 String::from_utf8_lossy(&result.stderr)
             );
-
             assert!(!result.status.success(), "{name}={value} should fail");
             assert!(output.contains(name), "{output}");
             assert!(
@@ -308,7 +304,6 @@ fn retention_environment_rejects_invalid_numbers_and_cross_field_windows() {
         ("LOGBROOK_ARCHIVE_AFTER_MS", "604800000"),
     ] {
         let result = check_configuration(&config, &[(name, value)]);
-
         assert!(!result.status.success());
         assert!(result.stdout.is_empty());
         assert!(
@@ -365,9 +360,9 @@ fn days_size_and_index_overrides_resolve_with_bounded_resources() {
         },
     );
     config.validate().unwrap();
+
     let default = config.for_index("default").unwrap();
     let payments = config.for_index("payments").unwrap();
-
     assert_eq!(default.retention_ms, 30 * 86_400_000);
     assert_eq!(default.storage.max_size_bytes, Some(20_000_000_000));
     assert_eq!(payments.retention_ms, 90 * 86_400_000);
@@ -408,14 +403,17 @@ fn invalid_index_policies_and_scope_names_are_rejected() {
     config.retention_days = Some(u64::MAX);
 
     assert!(config.validate().is_err());
+
     config.retention_days = Some(30);
     config.max_size_gb = Some(u64::MAX);
 
     assert!(config.validate().is_err());
+
     config.max_size_gb = None;
     config.storage.max_size_bytes = Some(1024);
 
     assert!(config.validate().is_err());
+
     config.storage.max_size_bytes = None;
     config.max_indexes = 1;
     config
@@ -429,11 +427,13 @@ fn invalid_index_policies_and_scope_names_are_rejected() {
             .message
             .contains("max_indexes")
     );
+
     config.max_indexes = 4;
     config.indexes.get_mut("payments").unwrap().retention_days = Some(3);
     config.indexes.get_mut("payments").unwrap().retention_ms = Some(123);
 
     assert!(config.validate().is_err());
+
     config.indexes.clear();
     config.read_index_scopes.insert(
         "synthetic-config-read-token".into(),
@@ -454,7 +454,6 @@ fn days_and_size_environment_aliases_validate_and_conflicts_fail() {
             ("LOGBROOK_INDEXES", "payments,audit"),
         ],
     );
-
     assert!(
         ok.status.success(),
         "{}",
@@ -485,5 +484,68 @@ fn days_and_size_environment_aliases_validate_and_conflicts_fail() {
         check_configuration(&days, &[("LOGBROOK_RETENTION_MS", "604800000")])
             .status
             .success()
+    );
+}
+
+#[test]
+fn promoted_keys_are_bounded_and_per_index_empty_override_is_explicit() {
+    use logbrook::config::IndexSettings;
+    let mut config = valid();
+    config.storage.promoted_string_keys = vec!["runId".into(), "actorJobId".into()];
+    config.indexes.insert(
+        "payments".into(),
+        IndexSettings {
+            promoted_string_keys: Some(vec![]),
+            ..Default::default()
+        },
+    );
+
+    config.validate().unwrap();
+    assert_eq!(
+        config
+            .for_index("default")
+            .unwrap()
+            .storage
+            .promoted_string_keys,
+        vec!["runId", "actorJobId"]
+    );
+    assert!(
+        config
+            .for_index("payments")
+            .unwrap()
+            .storage
+            .promoted_string_keys
+            .is_empty()
+    );
+
+    for keys in [
+        vec!["".into()],
+        vec!["x".repeat(257)],
+        vec!["runId".into(), "runId".into()],
+        (0..9).map(|i| format!("key{i}")).collect(),
+    ] {
+        config.storage.promoted_string_keys = keys;
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("promoted_string_keys")
+        );
+    }
+
+    config.storage.promoted_string_keys = vec![];
+    config
+        .indexes
+        .get_mut("payments")
+        .unwrap()
+        .promoted_string_keys = Some(vec!["".into()]);
+
+    assert!(
+        config
+            .validate()
+            .unwrap_err()
+            .message
+            .contains("promoted_string_keys")
     );
 }

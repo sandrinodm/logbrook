@@ -1,0 +1,7 @@
+/target/
+/artifacts/
+/coverage/
+# Newly discovered corpus entries are reviewed/minimized before checking in.
+/corpus/*/*
+!/corpus/*/*.msgpack
+!/corpus/*/*.bin

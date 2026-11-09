@@ -98,9 +98,32 @@
             "name": "cursor",
             "in": "query",
             "required": false,
-            "description": "Opaque stable pagination cursor",
+            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route; search also binds original time bounds and effective limit. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens.",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 1024
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -267,6 +290,28 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
+            }
           }
         ],
         "responses": {
@@ -431,6 +476,28 @@
             "description": "Minimum numeric severity",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -605,6 +672,28 @@
             "description": "Positive histogram bucket interval; maximum 2000 buckets",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -1029,7 +1118,7 @@
             "bearerAuth": []
           }
         ],
-        "description": "Bounded sequence-based SSE. Without Last-Event-ID starts at current committed highwater. Includes late arrivals. log frames contain canonical Event JSON and id; cursor frames advance id when caught up. gap/error frames terminate stream: reconcile retained history before reconnecting. Expired resume IDs emit a terminal gap; retention expiry conservatively invalidates IDs below the highest removed ingestion ID across all sources. Slow subscribers cannot block ingestion. IDs are decimal strings, distinct from opaque search cursors. All query filters are applied on the server before output buffering. Retained replay pages drain immediately; backlog length alone never emits a gap. Each subscriber has a configured outbound byte budget; an oversized retained/imported event returns 413 before streaming starts or emits a terminal gap once streaming has started. Commit notifications wake live subscribers with periodic polling as fallback.",
+        "description": "Bounded sequence-based SSE. Without Last-Event-ID starts at current committed highwater. Includes late arrivals. log frames contain canonical Event JSON and id; cursor frames advance id when caught up. gap/error frames terminate stream: reconcile retained history before reconnecting. Expired resume IDs emit a terminal gap; retention expiry conservatively invalidates IDs below the highest removed ingestion ID across all sources. Slow subscribers cannot block ingestion. SSE IDs are opaque versioned tokens bound to normalized filters and route, distinct from search cursors and decimal event JSON IDs. Changed-filter resumes and legacy numeric IDs return 400 before streaming. All query filters are applied on the server before output buffering. Retained replay pages drain immediately; backlog length alone never emits a gap. Each subscriber has a configured outbound byte budget; an oversized retained/imported event returns 413 before streaming starts or emits a terminal gap once streaming has started. Commit notifications wake live subscribers with periodic polling as fallback.",
         "parameters": [
           {
             "in": "query",
@@ -1044,9 +1133,10 @@
             "name": "Last-Event-ID",
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^v1\\.[A-Za-z0-9_-]+$",
+              "maxLength": 1024
             },
-            "description": "Resume after durable ingestion ID"
+            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens."
           },
           {
             "name": "service",
@@ -1091,6 +1181,28 @@
             "description": "Minimum numeric severity",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -1247,9 +1359,32 @@
             "name": "cursor",
             "in": "query",
             "required": false,
-            "description": "Opaque stable pagination cursor",
+            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route; search also binds original time bounds and effective limit. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens.",
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 1024
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -1439,6 +1574,28 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
+            }
           }
         ],
         "responses": {
@@ -1626,6 +1783,28 @@
             "description": "Minimum numeric severity",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -1823,6 +2002,28 @@
             "description": "Positive histogram bucket interval; maximum 2000 buckets",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -2074,7 +2275,7 @@
             "bearerAuth": []
           }
         ],
-        "description": "Bounded sequence-based SSE. Without Last-Event-ID starts at current committed highwater. Includes late arrivals. log frames contain canonical Event JSON and id; cursor frames advance id when caught up. gap/error frames terminate stream: reconcile retained history before reconnecting. Expired resume IDs emit a terminal gap; retention expiry conservatively invalidates IDs below the highest removed ingestion ID across all sources. Slow subscribers cannot block ingestion. IDs are opaque index-prefixed strings, distinct from opaque search cursors. All query filters are applied on the server before output buffering. Retained replay pages drain immediately; backlog length alone never emits a gap. Each subscriber has a configured outbound byte budget; an oversized retained/imported event returns 413 before streaming starts or emits a terminal gap once streaming has started. Commit notifications wake live subscribers with periodic polling as fallback. Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices. SSE frame IDs and Last-Event-ID use <index>:<decimal event ID>; event JSON id remains a decimal string.",
+        "description": "Bounded sequence-based SSE. Without Last-Event-ID starts at current committed highwater. Includes late arrivals. log frames contain canonical Event JSON and id; cursor frames advance id when caught up. gap/error frames terminate stream: reconcile retained history before reconnecting. Expired resume IDs emit a terminal gap; retention expiry conservatively invalidates IDs below the highest removed ingestion ID across all sources. Slow subscribers cannot block ingestion. IDs are opaque index-prefixed strings, distinct from opaque search cursors. All query filters are applied on the server before output buffering. Retained replay pages drain immediately; backlog length alone never emits a gap. Each subscriber has a configured outbound byte budget; an oversized retained/imported event returns 413 before streaming starts or emits a terminal gap once streaming has started. Commit notifications wake live subscribers with periodic polling as fallback. Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices. SSE frame IDs and Last-Event-ID are opaque versioned query-bound tokens with an index prefix; event JSON id remains a decimal string. Changed filters or legacy numeric resume tokens return 400 before streaming.",
         "parameters": [
           {
             "name": "index",
@@ -2101,9 +2302,10 @@
             "name": "Last-Event-ID",
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[a-z0-9][a-z0-9_-]*:v1\\.[A-Za-z0-9_-]+$",
+              "maxLength": 1024
             },
-            "description": "Resume after durable ingestion ID"
+            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens."
           },
           {
             "name": "service",
@@ -2148,6 +2350,28 @@
             "description": "Minimum numeric severity",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeFilter"
+                },
+                "example": {
+                  "attributes": [
+                    {
+                      "key": "runId",
+                      "op": "eq",
+                      "value": "run-123"
+                    }
+                  ]
+                }
+              }
             }
           }
         ],
@@ -2725,6 +2949,55 @@
           },
           "ready": {
             "type": "boolean"
+          }
+        }
+      },
+      "AttributeFilter": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attributes"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "key",
+                "op",
+                "value"
+              ],
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "description": "Literal immediate attribute key; 1\u2013256 UTF-8 bytes, also subject to configured field limit. No nested path syntax."
+                },
+                "op": {
+                  "type": "string",
+                  "const": "eq"
+                },
+                "value": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 1024
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ],
+                  "description": "Typed equality. String limit is 1024 UTF-8 bytes; numeric token limit 128 bytes. Null/objects/arrays are invalid. Integers remain exact through i64/u64; decimal/exponent values use finite binary64 stored-value precision."
+                }
+              }
+            }
           }
         }
       }

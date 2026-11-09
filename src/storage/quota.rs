@@ -1,8 +1,27 @@
 //! A measured file-footprint retention target, not a filesystem hard quota.
 //! Native allocation and bounded in-flight operations may temporarily exceed it.
-use super::*;
-use duckdb::OptionalExt;
+
+use super::{
+    Result,
+    archive::{expired_id, row_count_error},
+    db_error,
+    leases::{ArchiveLeases, cleanup_archives},
+    maintenance::{MaintenanceBudget, maintenance_gate, maintenance_reply, maintenance_send},
+    writer::Write,
+};
+use crate::model::{Error, ErrorKind};
+use duckdb::{Connection, OptionalExt, params};
 use std::path::PathBuf;
+#[cfg(test)]
+use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+};
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct DiskFootprint {
@@ -35,7 +54,6 @@ fn file_bytes(path: &Path) -> Result<u64> {
 pub(super) fn footprint(root: &Path) -> Result<DiskFootprint> {
     let mut result = DiskFootprint::default();
     let mut pending = vec![root.to_owned()];
-
     while let Some(directory) = pending.pop() {
         for entry in std::fs::read_dir(&directory).map_err(db_error)? {
             let entry = entry.map_err(db_error)?;
@@ -64,10 +82,10 @@ pub(super) fn footprint(root: &Path) -> Result<DiskFootprint> {
                 _ if first == Some("temp")
                     || path.extension().is_some_and(|extension| extension == "tmp") =>
                 {
-                    result.temporary = result.temporary.saturating_add(bytes)
+                    result.temporary = result.temporary.saturating_add(bytes);
                 }
                 _ if first == Some("archives") => {
-                    result.archives = result.archives.saturating_add(bytes)
+                    result.archives = result.archives.saturating_add(bytes);
                 }
                 _ => result.other = result.other.saturating_add(bytes),
             }
@@ -121,7 +139,6 @@ impl DiskBudget {
         self.temporary.store(snapshot.temporary, Ordering::Release);
         self.other.store(snapshot.other, Ordering::Release);
         let previous = self.measured.swap(snapshot.total(), Ordering::AcqRel);
-
         if snapshot.total() < previous {
             self.hot_attempted.store(false, Ordering::Release);
         }
@@ -142,7 +159,6 @@ impl DiskBudget {
             .saturating_add(self.temporary.load(Ordering::Acquire))
             .saturating_add(self.other.load(Ordering::Acquire));
         let previous = self.measured.swap(total, Ordering::AcqRel);
-
         if total < previous {
             self.hot_attempted.store(false, Ordering::Release);
         }
@@ -194,7 +210,7 @@ impl DiskBudget {
 
         Ok(Some(Reservation {
             _ticket: Arc::new(ReservationTicket {
-                budget: self.clone(),
+                budget: Arc::clone(self),
                 bytes,
             }),
         }))
@@ -221,8 +237,8 @@ impl Drop for ReservationTicket {
 pub(super) fn size_error() -> Error {
     Error::new(
         ErrorKind::SizeLimit,
-        "index size retention target has no safe disk headroom; retry after retention or increase the \
-            target; an unreclaimable DuckDB file may require an offline rebuild",
+        "index size retention target has no safe disk headroom; retry after retention or \
+            increase the target; an unreclaimable DuckDB file may require an offline rebuild",
     )
 }
 
@@ -256,6 +272,7 @@ fn expire(
         &work.budget.cancelled,
         work.budget.deadline,
     )?;
+
     let (reply, receiver) = oneshot::channel();
     maintenance_send(
         writer,
@@ -263,6 +280,77 @@ fn expire(
         work.budget,
     )?;
     maintenance_reply(receiver, work.budget)
+}
+
+/// Upper bound on expiry rounds before the enforcement falls back to the hot batch.
+const MAX_EXPIRY_ROUNDS: usize = 32;
+
+/// Reclaims WAL space. A refused checkpoint is retryable while readers are active,
+/// so only an integrity failure or a timeout is reported.
+fn reclaim_wal(writer: &mpsc::Sender<Write>, work: &SizeWork<'_>) -> Result<()> {
+    match checkpoint(writer, work) {
+        Err(error) if matches!(error.kind, ErrorKind::Integrity | ErrorKind::Timeout) => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// Expires the archive file with the oldest maximum time. Returns `None` when no
+/// archive is left, otherwise the rows that the expiry removed.
+fn expire_oldest_archive(
+    conn: &mut Connection,
+    archives: &Path,
+    writer: &mpsc::Sender<Write>,
+    work: &SizeWork<'_>,
+) -> Result<Option<usize>> {
+    let oldest: Option<i64> = conn
+        .query_row(
+            "SELECT max_time FROM archives ORDER BY min_time,max_time,path LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(last) = oldest else {
+        return Ok(None);
+    };
+
+    let cutoff = last.checked_add(1).ok_or_else(size_error)?;
+    let archived: i64 = conn
+        .query_row(
+            "SELECT coalesce(sum(row_count),0) FROM archives WHERE max_time < ?",
+            params![cutoff],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let archived = usize::try_from(archived).map_err(row_count_error)?;
+    let expired = expire(conn, archives, writer, cutoff, work)?;
+
+    Ok(Some(expired.saturating_add(archived)))
+}
+
+/// Expires the oldest batch of hot events. Returns `None` when no hot events remain.
+fn expire_hot_batch(
+    conn: &mut Connection,
+    archives: &Path,
+    writer: &mpsc::Sender<Write>,
+    work: &SizeWork<'_>,
+) -> Result<Option<usize>> {
+    work.budget.check()?;
+
+    let oldest_batch = format!(
+        "SELECT max(event_time) FROM \
+         (SELECT event_time FROM events ORDER BY event_time,id LIMIT {})",
+        work.rows
+    );
+    let last: Option<i64> = conn
+        .query_row(&oldest_batch, [], |row| row.get(0))
+        .map_err(db_error)?;
+    let Some(last) = last else {
+        return Ok(None);
+    };
+
+    let cutoff = last.checked_add(1).ok_or_else(size_error)?;
+    expire(conn, archives, writer, cutoff, work).map(Some)
 }
 
 /// Expire sealed files in event-time order. A pinned generation stops further
@@ -280,18 +368,13 @@ pub(super) fn enforce_size(
 
     cleanup_archives(work.gate, archives);
     let mut total = budget.audit()?;
-
     if total < limit {
         return Ok(0);
     }
 
     // Reclaim WAL before expiring data. CHECKPOINT may refuse active readers;
     // that is retryable, while an engine integrity failure remains fatal.
-    if let Err(error) = checkpoint(writer, &work)
-        && matches!(error.kind, ErrorKind::Integrity | ErrorKind::Timeout)
-    {
-        return Err(error);
-    }
+    reclaim_wal(writer, &work)?;
     total = budget.audit()?;
 
     if total < limit {
@@ -300,31 +383,12 @@ pub(super) fn enforce_size(
 
     let mut expired_rows = 0usize;
 
-    for _ in 0..32 {
+    for _ in 0..MAX_EXPIRY_ROUNDS {
         work.budget.check()?;
-        let oldest: Option<i64> = conn
-            .query_row(
-                "SELECT max_time FROM archives ORDER BY min_time,max_time,path LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(db_error)?;
-        let Some(last) = oldest else {
+        let Some(expired) = expire_oldest_archive(conn, archives, writer, &work)? else {
             break;
         };
-
-        let cutoff = last.checked_add(1).ok_or_else(size_error)?;
-        let archived: i64 = conn
-            .query_row(
-                "SELECT coalesce(sum(row_count),0) FROM archives WHERE max_time < ?",
-                params![cutoff],
-                |row| row.get(0),
-            )
-            .map_err(db_error)?;
-        expired_rows = expired_rows
-            .saturating_add(expire(conn, archives, writer, cutoff, &work)?)
-            .saturating_add(archived as usize);
+        expired_rows = expired_rows.saturating_add(expired);
 
         cleanup_archives(work.gate, archives);
         let previous = total;
@@ -340,11 +404,7 @@ pub(super) fn enforce_size(
 
         // WAL from manifest mutation can outweigh a tiny expired Parquet file.
         // Plain CHECKPOINT may refuse active readers; never force away snapshots.
-        if let Err(error) = checkpoint(writer, &work)
-            && matches!(error.kind, ErrorKind::Integrity | ErrorKind::Timeout)
-        {
-            return Err(error);
-        }
+        reclaim_wal(writer, &work)?;
         total = budget.audit()?;
 
         if total < limit {
@@ -368,34 +428,17 @@ pub(super) fn enforce_size(
         return Err(size_error());
     }
 
-    if !budget.hot_attempted.swap(true, Ordering::AcqRel) {
-        work.budget.check()?;
-        let oldest_batch = format!(
-            "SELECT max(event_time) FROM \
-             (SELECT event_time FROM events ORDER BY event_time,id LIMIT {})",
-            work.rows
-        );
-        let last: Option<i64> = conn
-            .query_row(&oldest_batch, [], |row| row.get(0))
-            .map_err(db_error)?;
+    if !budget.hot_attempted.swap(true, Ordering::AcqRel)
+        && let Some(expired) = expire_hot_batch(conn, archives, writer, &work)?
+    {
+        expired_rows = expired_rows.saturating_add(expired);
 
-        if let Some(last) = last {
-            let cutoff = last.checked_add(1).ok_or_else(size_error)?;
-            expired_rows =
-                expired_rows.saturating_add(expire(conn, archives, writer, cutoff, &work)?);
+        reclaim_wal(writer, &work)?;
+        cleanup_archives(work.gate, archives);
+        total = budget.audit()?;
 
-            if let Err(error) = checkpoint(writer, &work)
-                && matches!(error.kind, ErrorKind::Integrity | ErrorKind::Timeout)
-            {
-                return Err(error);
-            }
-
-            cleanup_archives(work.gate, archives);
-            total = budget.audit()?;
-
-            if total < limit {
-                return Ok(expired_rows);
-            }
+        if total < limit {
+            return Ok(expired_rows);
         }
     }
 
@@ -424,7 +467,6 @@ mod tests {
         }
 
         let result = footprint(directory.path()).unwrap();
-
         assert_eq!(result.database, 10);
         assert_eq!(result.wal, 20);
         assert_eq!(result.archives, 30);
@@ -453,5 +495,31 @@ mod tests {
         drop(reservation);
 
         assert_eq!(budget.reserved.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn expire_oldest_archive_rejects_negative_row_count_without_wrapping() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE archives(path VARCHAR, min_time BIGINT, max_time BIGINT, \
+             row_count BIGINT);
+             INSERT INTO archives VALUES ('bad.parquet', 1, 10, -5);",
+        )
+        .unwrap();
+        let (writer, _rx) = mpsc::channel(1);
+        let gate = Arc::new(Mutex::new(ArchiveLeases::default()));
+        let budget = MaintenanceBudget {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+        let work = SizeWork {
+            gate: &gate,
+            rows: 10,
+            budget: &budget,
+        };
+        let err = expire_oldest_archive(&mut conn, directory.path(), &writer, &work).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Integrity);
+        assert!(err.source.is_some());
     }
 }

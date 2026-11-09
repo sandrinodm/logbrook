@@ -1,3 +1,5 @@
+//! Shared process fixtures, independent protocol senders and HTTP helpers for integration tests.
+
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -7,6 +9,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+// Synthetic test credentials, not real secrets: each fixture server is started with them as
+// its ingest, read and admin tokens.
 pub const WRITE: &str = "synthetic-process-write-token";
 pub const READ: &str = "synthetic-process-read-token";
 pub const ADMIN: &str = "synthetic-process-admin-token";
@@ -63,10 +67,12 @@ impl Fixture {
         {
             command.env_remove(key);
         }
+
         command.envs(&self.env);
         if let Some(config) = &self.config {
             command.arg("--config").arg(config);
         }
+
         command
     }
 
@@ -77,6 +83,7 @@ impl Fixture {
         if remote {
             command.args(["--url", &self.base]);
         }
+
         let mut child = command
             .args(args)
             .stdout(stdout.try_clone().unwrap())
@@ -84,6 +91,7 @@ impl Fixture {
             .spawn()
             .unwrap();
         let status = wait_child(&mut child, Duration::from_secs(60));
+
         use std::io::{Read, Seek, SeekFrom};
         let read = |mut file: File| {
             file.seek(SeekFrom::Start(0)).unwrap();
@@ -94,12 +102,14 @@ impl Fixture {
         let output = read(stdout);
         let diagnostic = read(stderr);
         assert_eq!(status.success(), success, "{args:?}: {output}{diagnostic}");
+
         if !success {
             assert!(output.is_empty());
             for token in [WRITE, READ, ADMIN] {
                 assert!(!diagnostic.contains(token));
             }
         }
+
         output
     }
 
@@ -111,6 +121,7 @@ impl Fixture {
 
     pub async fn start(&mut self) {
         assert!(self.child.is_none());
+
         let log = File::options()
             .create(true)
             .append(true)
@@ -124,6 +135,7 @@ impl Fixture {
                 .spawn()
                 .unwrap(),
         );
+
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             assert!(
@@ -131,16 +143,19 @@ impl Fixture {
                 "server exited: {}",
                 self.logs()
             );
+
             if let Ok(response) = self.client.get(format!("{}/ready", self.base)).send().await
                 && response.status().is_success()
             {
                 return;
             }
+
             assert!(
                 Instant::now() < deadline,
                 "readiness timeout: {}",
                 self.logs()
             );
+
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -154,6 +169,7 @@ impl Fixture {
             .spawn()
             .unwrap();
         assert!(wait_child(&mut signal, Duration::from_secs(5)).success());
+
         assert!(
             wait_child(&mut child, Duration::from_secs(35)).success(),
             "{}",
@@ -183,6 +199,7 @@ impl Fixture {
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_vec(body).unwrap());
         }
+
         let response = builder.send().await.unwrap();
         let status = response.status().as_u16();
         let bytes = response.bytes().await.unwrap();
@@ -203,6 +220,7 @@ impl Fixture {
                 json!({"accepted": events.as_array().unwrap().len()})
             );
         }
+
         status
     }
 
@@ -213,6 +231,7 @@ impl Fixture {
             .append_pair("from", &(now() - 30 * 86_400_000).to_string())
             .append_pair("to", &(now() + 60000).to_string())
             .append_pair("message", message);
+
         let path = format!("{}?{}", url.path(), url.query().unwrap());
         let (status, answer) = self.request(&path, None, READ).await;
         assert_eq!(status, 200, "{answer}");
@@ -252,14 +271,17 @@ impl Fixture {
                 "{}",
                 self.logs()
             );
+
             if predicate(metric(&self.metrics().await, name, index)) {
                 return;
             }
+
             assert!(
                 Instant::now() < deadline,
                 "timed out waiting for {name}: {}",
                 self.logs()
             );
+
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -275,11 +297,13 @@ fn wait_child(child: &mut Child, timeout: Duration) -> ExitStatus {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
         }
+
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             panic!("child process exit timed out");
         }
+
         std::thread::sleep(Duration::from_millis(20));
     }
 }

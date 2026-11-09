@@ -19,7 +19,7 @@ impl ArchiveLeases {
     pub(super) fn register(&mut self, gate: &Arc<Mutex<Self>>) -> ReadLease {
         *self.active.entry(self.epoch).or_default() += 1;
         ReadLease {
-            gate: gate.clone(),
+            gate: Arc::clone(gate),
             epoch: self.epoch,
         }
     }
@@ -69,9 +69,7 @@ pub(super) fn cleanup_archives(gate: &Arc<Mutex<ArchiveLeases>>, dir: &Path) {
             .cloned()
             .collect()
     };
-
     let mut completed = BTreeSet::new();
-
     for item in ready {
         match std::fs::remove_file(dir.join(&item.1)) {
             Ok(()) => completed.insert(item),
@@ -169,7 +167,6 @@ mod tests {
             let _lease = gate.lock().unwrap().register(&gate);
             panic!("query failed");
         });
-
         assert!(result.is_err());
         assert!(!gate.lock().unwrap().has_readers());
     }

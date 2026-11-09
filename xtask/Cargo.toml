@@ -17,15 +17,16 @@ path = "src/main.rs"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4.5", features = ["derive"] }
 futures-util = "0.3"
+flate2 = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }
 semver = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha2 = "0.10"
+sha2 = "0.11.1"
 tar = "0.4"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util", "process"] }
-toml = "1.1.6"
+toml = "1.1.8"
 
 [lints.rust]
 unsafe_code = "forbid"

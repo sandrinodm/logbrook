@@ -30,6 +30,7 @@ async fn metrics_scrapes_survive_server_idle_connection_timeout() -> Result<()> 
                 command.env_remove(key);
             }
         }
+
         command
             .env("LOGBROOK_INGEST_TOKEN", &fixture.ingest_token)
             .env("LOGBROOK_READ_TOKEN", &fixture.read_token)
@@ -69,6 +70,7 @@ async fn metrics_scrapes_survive_server_idle_connection_timeout() -> Result<()> 
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+
         let report: Value = serde_json::from_slice(&std::fs::read(report_path)?)?;
         let samples = report["metrics_samples"]
             .as_array()

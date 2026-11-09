@@ -5,6 +5,11 @@
 
 use std::io::{self, Write};
 
+/// Writes one line of command output to stdout and flushes it.
+///
+/// # Errors
+///
+/// Fails on any write error except a closed pipe, which counts as success.
 pub fn line(arguments: std::fmt::Arguments<'_>) -> io::Result<()> {
     write_line(&mut io::stdout().lock(), arguments)
 }

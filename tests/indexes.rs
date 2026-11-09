@@ -1,3 +1,4 @@
+//! Index lifecycle, isolation, limits and registry regression tests.
 use logbrook::{
     config::{Config, IndexSettings},
     indexes::IndexRegistry,
@@ -46,7 +47,6 @@ async fn isolates_indexes_and_discovers_them_after_restart() {
     );
 
     let registry = IndexRegistry::open(config.clone()).await.unwrap();
-
     assert_eq!(
         registry.get("payments").unwrap().config.retention_ms,
         30 * 86_400_000
@@ -78,7 +78,6 @@ async fn isolates_indexes_and_discovers_them_after_restart() {
         limit: 10,
         ..Default::default()
     };
-
     assert_eq!(
         restarted
             .get("default")
@@ -122,7 +121,6 @@ async fn concurrent_creation_is_idempotent_bounded_and_shutdown_closes_admission
     config.max_indexes = 2;
 
     let registry = IndexRegistry::open(config).await.unwrap();
-
     let (first, second) = tokio::join!(registry.ensure("payments"), registry.ensure("payments"));
     first.unwrap();
     second.unwrap();
@@ -144,7 +142,6 @@ async fn old_flat_layout_is_not_silently_ignored() {
     std::fs::write(root.path().join("events.duckdb"), b"untouched fixture").unwrap();
 
     let result = IndexRegistry::open(config(root.path())).await;
-
     assert!(
         result
             .err()
@@ -170,6 +167,7 @@ async fn managed_index_symlinks_are_rejected() {
     symlink(outside.path(), root.path().join("indexes/default")).unwrap();
 
     assert!(IndexRegistry::open(config(root.path())).await.is_err());
+
     std::fs::remove_file(root.path().join("indexes/default")).unwrap();
     std::fs::create_dir(root.path().join("indexes/default")).unwrap();
     symlink(outside.path(), root.path().join("indexes/default/archives")).unwrap();
@@ -184,7 +182,6 @@ async fn offline_flat_layout_move_preserves_hot_and_archived_data() {
 
     let root = tempfile::tempdir().unwrap();
     let config = config(root.path());
-
     // Simulate the previous layout and its manifest-relative archive paths.
     let old = Storage::open(config.storage.clone()).unwrap();
     let first = event("archived-before-layout-move");
@@ -218,7 +215,6 @@ async fn offline_flat_layout_move_preserves_hot_and_archived_data() {
         })
         .await
         .unwrap();
-
     assert_eq!(result.events.len(), 2);
 
     let mut messages: Vec<_> = result
@@ -286,7 +282,6 @@ async fn deletion_removes_all_data_reclaims_capacity_and_never_reuses_old_handle
     assert!(registry.is_ready());
 
     let replacement = registry.ensure("audit").await.unwrap();
-
     assert_eq!(replacement.storage.count(all_events()).await.unwrap(), 0);
 
     // A cloned obsolete handle cannot close the replacement's connections.
@@ -304,7 +299,6 @@ async fn deletion_removes_all_data_reclaims_capacity_and_never_reuses_old_handle
     registry.shutdown().await.unwrap();
 
     let restarted = IndexRegistry::open(config.clone()).await.unwrap();
-
     assert_eq!(
         restarted
             .get("audit")
@@ -320,7 +314,6 @@ async fn deletion_removes_all_data_reclaims_capacity_and_never_reuses_old_handle
     restarted.shutdown().await.unwrap();
 
     let restarted = IndexRegistry::open(config).await.unwrap();
-
     assert!(restarted.get("audit").is_none());
     restarted.ensure("third").await.unwrap();
 
@@ -339,12 +332,10 @@ async fn default_and_preconfigured_indexes_require_configuration_changes() {
 
     let registry = IndexRegistry::open(config).await.unwrap();
     let error = registry.delete("default").await.unwrap_err();
-
     assert_eq!(error.kind, ErrorKind::Invalid);
     assert!(error.message.contains("default"));
 
     let error = registry.delete("managed").await.unwrap_err();
-
     assert_eq!(error.kind, ErrorKind::Invalid);
     assert!(error.message.contains("configuration and restart"));
     assert_eq!(
@@ -364,7 +355,6 @@ async fn default_and_preconfigured_indexes_require_configuration_changes() {
 #[tokio::test]
 async fn deletion_completion_survives_the_admitted_callers_cancellation() {
     let root = tempfile::tempdir().unwrap();
-
     let registry = IndexRegistry::open(config(root.path())).await.unwrap();
     let old = registry.ensure("cancelled").await.unwrap();
     old.storage
@@ -383,6 +373,7 @@ async fn deletion_completion_survives_the_admitted_callers_cancellation() {
         let registry = registry.clone();
         async move { registry.delete("cancelled").await }
     });
+
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while old.storage.is_ready() {
             tokio::task::yield_now().await;
@@ -398,7 +389,6 @@ async fn deletion_completion_survives_the_admitted_callers_cancellation() {
             if registry.get("cancelled").is_none() {
                 // ensure shares the lifecycle gate and waits for physical cleanup.
                 let replacement = registry.ensure("cancelled").await.unwrap();
-
                 assert_eq!(replacement.storage.count(all_events()).await.unwrap(), 0);
                 break;
             }
@@ -417,7 +407,6 @@ async fn deletion_and_recreation_are_serialized_and_shutdown_drains_both() {
     use logbrook::model::ErrorKind;
 
     let root = tempfile::tempdir().unwrap();
-
     let registry = IndexRegistry::open(config(root.path())).await.unwrap();
     let old = registry.ensure("racing").await.unwrap();
     old.storage
@@ -429,6 +418,7 @@ async fn deletion_and_recreation_are_serialized_and_shutdown_drains_both() {
         let registry = registry.clone();
         async move { registry.delete("racing").await }
     });
+
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while old.storage.is_ready() {
             tokio::task::yield_now().await;
@@ -441,9 +431,7 @@ async fn deletion_and_recreation_are_serialized_and_shutdown_drains_both() {
         let registry = registry.clone();
         async move { registry.ensure("racing").await }
     });
-
     let (deletion, creation, shutdown) = tokio::join!(deletion, creation, registry.shutdown());
-
     // Shutdown may close admission before or after the admitted deletion.
     assert!(deletion.unwrap().is_ok());
 
@@ -464,13 +452,13 @@ async fn restart_cleans_committed_deletion_tombstones_without_discovery() {
     let root = tempfile::tempdir().unwrap();
     let mut config = config(root.path());
     config.max_indexes = 1;
+
     let tombstone = root.path().join(".index-trash/deleted-crashed/data");
     std::fs::create_dir_all(tombstone.join("archives")).unwrap();
     std::fs::write(tombstone.join("events.duckdb"), b"deleted database").unwrap();
     std::fs::write(tombstone.join("archives/old.parquet"), b"deleted archive").unwrap();
 
     let registry = IndexRegistry::open(config).await.unwrap();
-
     assert_eq!(registry.list().len(), 1);
     assert!(!tombstone.parent().unwrap().exists());
 
@@ -518,6 +506,7 @@ async fn deletion_rejects_symlinks_and_closed_failure_can_be_retried_safely() {
         b"outside data"
     );
     assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 1);
+
     std::fs::remove_file(root.path().join(".index-trash")).unwrap();
     registry.delete("safe").await.unwrap();
 
@@ -544,6 +533,7 @@ async fn trash_symlinks_and_unknown_entries_cannot_be_removed_on_restart() {
         std::fs::read(outside.path().join("untouched")).unwrap(),
         b"outside data"
     );
+
     std::fs::remove_file(tombstone.join("data")).unwrap();
     std::fs::remove_dir(&tombstone).unwrap();
 

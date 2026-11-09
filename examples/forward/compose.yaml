@@ -1,0 +1,53 @@
+services:
+  logbrook:
+    build: ../..
+    command: ["--config", "/etc/logbrook.toml", "serve"]
+    environment:
+      LOGBROOK_INGEST_TOKEN: ${LOGBROOK_INGEST_TOKEN:?Set a random HTTP ingestion token}
+      LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set a different read token}
+      LOGBROOK_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:3100:3100"
+      - "127.0.0.1:24524:24224"
+    volumes:
+      - ./logbrook.toml:/etc/logbrook.toml:ro
+      - logs:/data
+    networks: [logs]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 35s
+    restart: unless-stopped
+
+  # Start explicitly with --profile smoke; creates a disposable synthetic event.
+  producer:
+    image: busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+    profiles: [smoke]
+    command: ["sh", "-c", "echo 'logbrook-forward-synthetic'; sleep 2"]
+    depends_on:
+      logbrook:
+        condition: service_healthy
+    networks: [logs]
+    logging:
+      driver: fluentd
+      options:
+        fluentd-address: "127.0.0.1:24524"
+        fluentd-async: "true"
+        fluentd-sub-second-precision: "true"
+        fluentd-request-ack: "true"
+        fluentd-buffer-limit: "8192"
+        fluentd-write-timeout: "5s"
+        tag: "application.smoke"
+        cache-max-size: "10m"
+        cache-max-file: "3"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  logs:
+networks:
+  logs:
+    internal: true

@@ -10,6 +10,7 @@ use std::{fs, path::Path};
 #[path = "release_workflow_tests.rs"]
 mod workflow_tests;
 
+/// Options for `cargo xtask release-version`.
 #[derive(clap::Args)]
 pub struct Args {
     /// current, patch, minor, major, or an explicit version without a leading v.
@@ -36,6 +37,13 @@ struct Package {
     source: Option<String>,
 }
 
+/// Prints the release version that `args` would prepare, writing the version files unless
+/// `dry_run` is set.
+///
+/// # Errors
+///
+/// Returns an error when the version request is invalid or any version file is missing,
+/// inconsistent or stale.
 pub fn run(args: Args) -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -43,6 +51,10 @@ pub fn run(args: Args) -> Result<()> {
     crate::emit_json(&prepare(root, &args.version, args.dry_run)?)
 }
 
+/// Largest release tag, including its leading `v`, that the publisher accepts.
+const TAG_LENGTH_LIMIT: usize = 128;
+
+/// The release version that `requested` names, checked against `current`.
 fn target_version(current: &Version, requested: &str) -> Result<Version> {
     let mut target = current.clone();
 
@@ -87,7 +99,7 @@ fn target_version(current: &Version, requested: &str) -> Result<Version> {
     }
 
     // Both the image version and the v-prefixed release tag must fit the publisher's limit.
-    if target.to_string().len() + 1 > 128 {
+    if target.to_string().len() + 1 > TAG_LENGTH_LIMIT {
         return Err("release tag exceeds the 128-character publication limit".into());
     }
 
@@ -95,7 +107,10 @@ fn target_version(current: &Version, requested: &str) -> Result<Version> {
 }
 
 fn fingerprint(text: &str) -> String {
-    format!("Cargo.lock SHA-256: {:x}", Sha256::digest(text.as_bytes()))
+    format!(
+        "Cargo.lock SHA-256: {}",
+        crate::hex_digest(&Sha256::digest(text.as_bytes()))
+    )
 }
 
 fn replace_once(text: &str, old: &str, new: &str) -> Result<String> {
@@ -106,6 +121,56 @@ fn replace_once(text: &str, old: &str, new: &str) -> Result<String> {
     Ok(text.replacen(old, new, 1))
 }
 
+/// The local Logbrook package in `lock`, after checking that the manifest names Logbrook and
+/// that both files agree on its version.
+fn local_logbrook_package<'a>(manifest: &Manifest, lock: &'a Lockfile) -> Result<&'a Package> {
+    if manifest.package.name != "logbrook" {
+        return Err("release preparation requires the Logbrook application manifest".into());
+    }
+
+    let candidates: Vec<_> = lock
+        .package
+        .iter()
+        .filter(|package| package.name == "logbrook" && package.source.is_none())
+        .collect();
+    let [locked] = candidates.as_slice() else {
+        return Err("Cargo.lock must contain exactly one local Logbrook package".into());
+    };
+    if locked.version.get_ref() != manifest.package.version.get_ref() {
+        return Err("Cargo.toml and Cargo.lock application versions differ".into());
+    }
+
+    Ok(locked)
+}
+
+/// Checks that the OpenAPI document and the Dockerfile name `current`, then returns both
+/// with `target` in their place.
+fn distributed_versions(
+    api_text: &str,
+    docker_text: &str,
+    current: &Version,
+    target: &Version,
+) -> Result<(String, String)> {
+    let api: serde_json::Value = serde_json::from_str(api_text)?;
+    if api["info"]["version"] != current.to_string() {
+        return Err("OpenAPI version differs from the application version".into());
+    }
+
+    let api_text = replace_once(
+        api_text,
+        &format!("\"version\": \"{current}\""),
+        &format!("\"version\": \"{target}\""),
+    )?;
+    let docker_text = replace_once(
+        docker_text,
+        &format!("\nARG VERSION={current}\n"),
+        &format!("\nARG VERSION={target}\n"),
+    )?;
+    Ok((api_text, docker_text))
+}
+
+/// Rewrites the application version in every version file, or only reports the result when
+/// `dry_run` is set. Every check runs before the first file is written.
 fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Value> {
     let manifest_path = root.join("Cargo.toml");
     let lock_path = root.join("Cargo.lock");
@@ -119,24 +184,7 @@ fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Va
     let api_text = fs::read_to_string(&api_path)?;
     let manifest: Manifest = toml::from_str(&manifest_text)?;
     let lock: Lockfile = toml::from_str(&lock_text)?;
-
-    if manifest.package.name != "logbrook" {
-        return Err("release preparation requires the Logbrook application manifest".into());
-    }
-
-    let candidates: Vec<_> = lock
-        .package
-        .iter()
-        .filter(|package| package.name == "logbrook" && package.source.is_none())
-        .collect();
-    let [locked] = candidates.as_slice() else {
-        return Err("Cargo.lock must contain exactly one local Logbrook package".into());
-    };
-
-    if locked.version.get_ref() != manifest.package.version.get_ref() {
-        return Err("Cargo.toml and Cargo.lock application versions differ".into());
-    }
-
+    let locked = local_logbrook_package(&manifest, &lock)?;
     let old_fingerprint = fingerprint(&lock_text);
     if notices_text.matches(&old_fingerprint).count() != 1 {
         return Err(
@@ -148,23 +196,10 @@ fn prepare(root: &Path, requested: &str, dry_run: bool) -> Result<serde_json::Va
     let target = target_version(&current, requested)?;
     let changed = current != target;
     let replacement = format!("\"{target}\"");
-
     // These distributed metadata fields describe the application release too.
     // Validate all markers before writing any of the version files.
-    let api: serde_json::Value = serde_json::from_str(&api_text)?;
-    if api["info"]["version"] != current.to_string() {
-        return Err("OpenAPI version differs from the application version".into());
-    }
-    let api_text = replace_once(
-        &api_text,
-        &format!("\"version\": \"{current}\""),
-        &format!("\"version\": \"{target}\""),
-    )?;
-    let docker_text = replace_once(
-        &docker_text,
-        &format!("\nARG VERSION={current}\n"),
-        &format!("\nARG VERSION={target}\n"),
-    )?;
+    let (api_text, docker_text) = distributed_versions(&api_text, &docker_text, &current, &target)?;
+
     manifest_text.replace_range(manifest.package.version.span(), &replacement);
     lock_text.replace_range(locked.version.span(), &replacement);
 
@@ -196,8 +231,15 @@ mod tests {
 
     pub(super) fn fixture() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
-        let lock = "version = 4\n\n[[package]]\nname = \"logbrook\"\nversion = \"0.1.0\"\n\n[[package]]\nname = \"dependency\"\nversion = \"0.1.0\"\nsource = \"registry+example\"\n";
-        fs::write(directory.path().join("Cargo.toml"), "# Keep this comment.\n[package]\nname = \"logbrook\"\nversion = \"0.1.0\" # application\n\n[dependencies]\ndependency = \"0.1.0\"\n").unwrap();
+        let lock = "version = 4\n\n[[package]]\nname = \"logbrook\"\nversion = \"0.1.0\"\n\n\
+            [[package]]\nname = \"dependency\"\nversion = \"0.1.0\"\n\
+            source = \"registry+example\"\n";
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "# Keep this comment.\n[package]\nname = \"logbrook\"\n\
+                version = \"0.1.0\" # application\n\n[dependencies]\ndependency = \"0.1.0\"\n",
+        )
+        .unwrap();
         fs::write(directory.path().join("Cargo.lock"), lock).unwrap();
         fs::write(
             directory.path().join("Dockerfile"),
@@ -255,7 +297,6 @@ mod tests {
         let root = directory.path();
         let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap();
         let lock = fs::read_to_string(root.join("Cargo.lock")).unwrap();
-
         let preview = prepare(root, "minor", true).unwrap();
         assert_eq!(preview["tag"], "v0.2.0");
         assert_eq!(
@@ -269,6 +310,7 @@ mod tests {
             fs::read_to_string(root.join("Cargo.toml")).unwrap(),
             manifest.replacen("version = \"0.1.0\"", "version = \"0.2.0\"", 1)
         );
+
         let updated_lock = fs::read_to_string(root.join("Cargo.lock")).unwrap();
         assert_eq!(
             updated_lock,
@@ -278,12 +320,14 @@ mod tests {
             fs::read_to_string(root.join("THIRD_PARTY_NOTICES.txt")).unwrap(),
             format!("{}\n\nOriginal license text\n", fingerprint(&updated_lock))
         );
+
         assert_eq!(prepare(root, "current", false).unwrap()["changed"], false);
         assert!(
             fs::read_to_string(root.join("Dockerfile"))
                 .unwrap()
                 .contains("ARG VERSION=0.2.0\n")
         );
+
         let api: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(root.join("src/openapi.json")).unwrap())
                 .unwrap();

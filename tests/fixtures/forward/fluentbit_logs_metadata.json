@@ -1,0 +1,10 @@
+{
+  "producer": "fluent/fluent-bit:5.1.2",
+  "image_digest": "sha256:d792375ca8e53be72fc25716c28f291f32c6fc6f4f31d12d0d14bc78cefe9226",
+  "capture_date": "2026-11-04",
+  "wire_file": "fluentbit_logs_metadata.msgpack",
+  "sha256": "0ff1b277a5cdefceae5f8cfc50336cd8a25d5fcf1e0717e1a47ac611f4574a3c",
+  "bytes": 192,
+  "description": "Independent container capture. One synthetic dummy-input log record via Forward output with gzip and Require_ack_response On. fluent_signal=0, timestamp metadata array with empty metadata map. No credentials or real log content.",
+  "configuration": "[SERVICE]\n    Flush 1\n[INPUT]\n    Name dummy\n    Tag interop.collector.fluentbit\n    Dummy {\"message\":\"reference-fluentbit-gzip\",\"fixture\":\"fluentbit\"}\n    Rate 1\n[OUTPUT]\n    Name forward\n    Match *\n    Host host.docker.internal\n    Port 25425\n    Require_ack_response On\n    Compress gzip\n"
+}

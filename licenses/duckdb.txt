@@ -1,10 +1,10 @@
-libduckdb-sys 1.10506.0: bundled source licenses
+libduckdb-sys 1.20000.1: bundled source licenses
 Upstream: https://github.com/duckdb/duckdb
-Revision: 069cc9f9b5be802405797faecc284961b07c70ef
+Revision: d54cbbe3df17e8e5ce68312f483b4155836112aa
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/LICENSE
 
-Copyright 2018-2025 Stichting DuckDB Foundation
+Copyright 2018-2026 Stichting DuckDB Foundation
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -14,7 +14,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/src/include/duckdb/storage/compression/alp/algorithm/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/src/include/duckdb/storage/compression/alp/algorithm/LICENSE
 
 MIT License
 
@@ -40,7 +40,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/src/include/duckdb/storage/compression/alprd/algorithm/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/src/include/duckdb/storage/compression/alprd/algorithm/LICENSE
 
 MIT License
 
@@ -66,7 +66,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/brotli/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/brotli/LICENSE
 
 Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
 
@@ -90,7 +90,7 @@ THE SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/concurrentqueue/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/concurrentqueue/LICENSE
 
 This license file applies to everything in this repository except that which
 is explicitly annotated as being written by other authors, i.e. the Boost
@@ -156,7 +156,7 @@ DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fast_float/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/fast_float/LICENSE
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -184,7 +184,7 @@ DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fastpforlib/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/fastpforlib/LICENSE
 
 Apache License
 Version 2.0, January 2004
@@ -380,7 +380,7 @@ third-party archives.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fmt/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/fmt/LICENSE
 
 Copyright (c) 2012 - present, Victor Zverovich
 
@@ -412,7 +412,7 @@ without including the above copyright and permission notices.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/fsst/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/fsst/LICENSE
 
 MIT License
 
@@ -438,7 +438,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/httplib/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/httplib/LICENSE
 
 The MIT License (MIT)
 
@@ -464,7 +464,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/hyperloglog/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/hyperloglog/LICENSE
 
 Copyright (c) 2012 Art.sy, Inc.
 
@@ -488,7 +488,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/jaro_winkler/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/jaro_winkler/LICENSE
 
 Copyright © 2022 Max Bachmann
 
@@ -513,40 +513,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/libpg_query/LICENSE
-
-Copyright (c) 2015, Lukas Fittl <lukas@fittl.com>
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-* Redistributions of source code must retain the above copyright notice, this
-list of conditions and the following disclaimer.
-
-* Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-
-* Neither the name of pg_query nor the names of its contributors may be used
-to endorse or promote products derived from this software without specific
-prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
-==============================================================================
-
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/lz4/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/lz4/LICENSE
 
 LZ4 Library
 Copyright (c) 2011-2020, Yann Collet
@@ -575,7 +542,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/mbedtls/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/mbedtls/LICENSE
 
 Mbed TLS files are provided under a dual [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html)
 OR [GPL-2.0-or-later](https://spdx.org/licenses/GPL-2.0-or-later.html) license.
@@ -1133,7 +1100,7 @@ Public License instead of this License.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/miniz/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/miniz/LICENSE
 
 Copyright 2013-2014 RAD Game Tools and Valve Software
 Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
@@ -1160,7 +1127,7 @@ THE SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/parquet/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/parquet/LICENSE
 
 
                                  Apache License
@@ -1382,7 +1349,7 @@ License: http://www.apache.org/licenses/LICENSE-2.0
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/pcg/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/pcg/LICENSE
 
 Copyright (c) 2014-2017 Melissa O'Neill and PCG Project contributors
 
@@ -1406,7 +1373,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/pdqsort/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/pdqsort/LICENSE
 
 Copyright (c) 2021 Orson Peters <orsonpeters@gmail.com>
 
@@ -1427,7 +1394,7 @@ applications, and to alter it and redistribute it freely, subject to the followi
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/re2/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/re2/LICENSE
 
 // Copyright (c) 2009 The RE2 Authors. All rights reserved.
 //
@@ -1459,7 +1426,7 @@ Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797fae
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/ska_sort/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/ska_sort/LICENSE
 
           Copyright Malte Skarupke 2016.
  Distributed under the Boost Software License, Version 1.0.
@@ -1467,7 +1434,7 @@ Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797fae
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/skiplist/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/skiplist/LICENSE
 
 MIT License
 
@@ -1493,7 +1460,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/snappy/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/snappy/LICENSE
 
 Copyright 2011, Google Inc.
 All rights reserved.
@@ -1552,7 +1519,7 @@ Some of the benchmark data in testdata/ is licensed differently:
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/tdigest/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/tdigest/LICENSE
 
                                  Apache License
                            Version 2.0, January 2004
@@ -1758,7 +1725,18 @@ Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797fae
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/thrift/thrift/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/tdigest/NOTICES
+
+The Java version of the t-digest was originally authored by Ted Dunning
+
+A number of small but very helpful changes have been contributed by Adrien Grand (https://github.com/jpountz) to the Java version.
+
+The C++ version herein is a derivative of the Java version.  It was written by Derrick R. Burns (https:://github.com/derrickburns).
+The main modifications are 1) higher performance multi- t-digest merging and 2) faster quantile() and cdf() computation.
+
+==============================================================================
+
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/thrift/thrift/LICENSE
 
 
                                  Apache License
@@ -2002,7 +1980,7 @@ For the lib/nodejs/lib/thrift/json_parse.js:
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/utf8proc/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/utf8proc/LICENSE
 
 ## utf8proc license ##
 
@@ -2100,7 +2078,7 @@ trademarks mentioned herein are the property of their respective owners.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/vergesort/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/vergesort/LICENSE
 
 The MIT License (MIT)
 
@@ -2126,7 +2104,7 @@ THE SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/yyjson/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/yyjson/LICENSE
 
 MIT License
 
@@ -2152,7 +2130,7 @@ SOFTWARE.
 
 ==============================================================================
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb/069cc9f9b5be802405797faecc284961b07c70ef/third_party/zstd/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb/d54cbbe3df17e8e5ce68312f483b4155836112aa/third_party/zstd/LICENSE
 
 BSD License
 

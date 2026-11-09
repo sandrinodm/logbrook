@@ -32,6 +32,7 @@ fn credentials_are_private_distinct_and_never_overwritten() {
             .status
             .success()
     );
+
     let path = directory.path().join(".env");
     let original = fs::read_to_string(&path).unwrap();
     let tokens: Vec<_> = original

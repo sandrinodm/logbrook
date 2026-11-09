@@ -57,6 +57,7 @@ impl Release {
         git(work.path(), &["add", "."]);
         git(work.path(), &["commit", "-m", "Initial version"]);
         let base = git(work.path(), &["rev-parse", "HEAD"]);
+
         git(remote.path(), &["init", "--bare", "--initial-branch=main"]);
         git(
             work.path(),
@@ -141,6 +142,7 @@ fn publishes_initial_bumped_and_unusual_prerelease_versions_without_hooks() {
     for request in ["current", "patch", "0.2.0-rc.1", "0.2.0--x"] {
         let release = Release::new(request);
         assert_success(release.validate());
+
         run(Command::new("bash")
             .args(["-e", "-c", &guard])
             .env("RELEASE_TAG", format!("v{}", release.version))
@@ -149,6 +151,7 @@ fn publishes_initial_bumped_and_unusual_prerelease_versions_without_hooks() {
         let hook = release.work.path().join(".git/hooks/pre-push");
         fs::write(&hook, "#!/bin/sh\ntouch hook-executed\nexit 1\n").unwrap();
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+
         assert_success(release.push());
         assert!(!release.work.path().join("hook-executed").exists());
 
@@ -164,6 +167,7 @@ fn publishes_initial_bumped_and_unusual_prerelease_versions_without_hooks() {
                 .unwrap()
                 .contains(&remote_commit)
         );
+
         if request != "current" {
             assert_eq!(
                 git(release.remote.path(), &["log", "-1", "--format=%s"]),
@@ -209,6 +213,7 @@ fn rejects_dependency_changes_extra_edits_and_wrong_notice_fingerprints() {
                 fs::write(file, format!("{text}unwanted = \"1\"\n")).unwrap();
             }
         }
+
         let result = release.validate();
         assert!(
             !result.status.success(),
@@ -227,6 +232,7 @@ fn refuses_stale_main_duplicate_tags_and_atomic_push_rejections() {
     for fault in ["stale", "duplicate", "atomic"] {
         let release = Release::new("patch");
         assert_success(release.validate());
+
         match fault {
             "stale" => {
                 let clone = release.scratch.path().join("concurrent");
@@ -238,6 +244,7 @@ fn refuses_stale_main_duplicate_tags_and_atomic_push_rejections() {
                         clone.to_str().unwrap(),
                     ],
                 );
+
                 git(
                     &clone,
                     &[
@@ -251,6 +258,7 @@ fn refuses_stale_main_duplicate_tags_and_atomic_push_rejections() {
                         "Concurrent update",
                     ],
                 );
+
                 git(&clone, &["push", "origin", "main"]);
             }
             "duplicate" => {
@@ -258,10 +266,16 @@ fn refuses_stale_main_duplicate_tags_and_atomic_push_rejections() {
             }
             _ => {
                 let hook = release.remote.path().join("hooks/pre-receive");
-                fs::write(&hook, "#!/bin/sh\nwhile read -r old new ref; do\n  case $ref in refs/tags/*) exit 1 ;; esac\ndone\n").unwrap();
+                fs::write(
+                    &hook,
+                    "#!/bin/sh\nwhile read -r old new ref; do\n  case $ref in refs/tags/*) \
+                        exit 1 ;; esac\ndone\n",
+                )
+                .unwrap();
                 fs::set_permissions(hook, fs::Permissions::from_mode(0o755)).unwrap();
             }
         }
+
         let before = git(release.remote.path(), &["show-ref"]);
         assert!(!release.push().status.success(), "accepted {fault}");
         assert_eq!(git(release.remote.path(), &["show-ref"]), before);
@@ -291,6 +305,7 @@ printf '%s\n' 'https://example.invalid/release'
     )
     .unwrap();
     fs::set_permissions(mock, fs::Permissions::from_mode(0o755)).unwrap();
+
     let script = workflow_step(
         ".github/workflows/create-release.yml",
         "Create release with generated notes",
@@ -314,10 +329,12 @@ printf '%s\n' 'https://example.invalid/release'
             .env("RELEASE_COMMIT", "0123456789")
             .env("UPDATE_LATEST", "false"));
     }
+
     let arguments = fs::read_to_string(scratch.path().join("arguments")).unwrap();
     assert!(arguments.contains("--prerelease\n"));
     assert!(arguments.contains("--latest=false\n"));
     assert!(arguments.contains("--verify-tag\n"));
+
     let notes = fs::read_to_string(scratch.path().join("release-notes.md")).unwrap();
     assert!(notes.contains("ghcr.io/example/logbrook:0.2.0-rc.1"));
 }

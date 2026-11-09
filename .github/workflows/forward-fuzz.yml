@@ -1,0 +1,71 @@
+name: Forward fuzzing
+on:
+  pull_request:
+    paths:
+      - 'src/forward/**'
+      - 'src/model.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'tests/forward_properties.rs'
+      - 'tests/fixtures/forward/**'
+      - 'fuzz/**'
+      - '.github/workflows/forward-fuzz.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/forward/**'
+      - 'src/model.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'fuzz/**'
+      - '.github/workflows/forward-fuzz.yml'
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [framing, envelope, packed_payload, options_timestamps, docker_normalize]
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned fuzz tools
+        run: |
+          rustup toolchain install nightly-2026-11-01 --profile minimal --component rust-src
+          cargo +nightly-2026-11-01 install cargo-fuzz --version 0.13.2 --locked
+      - name: Verify standalone dependency lock and sender seed corpus
+        run: |
+          cargo +nightly-2026-11-01 metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 --no-deps > /dev/null
+          python3 fuzz/seed_corpus.py
+          git diff --exit-code -- fuzz/corpus
+      - name: Run bounded AddressSanitizer campaign
+        shell: bash
+        env:
+          CAMPAIGN_SECONDS: ${{ github.event_name == 'schedule' && '300' || '30' }}
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-11-01 fuzz run "$FUZZ_TARGET" -- \
+            -max_total_time="$CAMPAIGN_SECONDS" -max_len=65536 -timeout=3 \
+            -rss_limit_mb=1024 -malloc_limit_mb=32 -dict="$PWD/fuzz/forward.dict" \
+            2>&1 | tee "fuzz-$FUZZ_TARGET.log"
+      - name: Preserve minimized crash input and campaign log
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: forward-fuzz-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/
+            fuzz-${{ matrix.target }}.log
+          if-no-files-found: ignore
+          retention-days: 14

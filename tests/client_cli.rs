@@ -1,3 +1,4 @@
+//! Client command regressions for authentication, request parameters and output.
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -38,11 +39,11 @@ fn stub(response: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
+
         let mut request = Vec::new();
         let mut chunk = [0; 4096];
         while !request.ends_with(b"\r\n\r\n") {
             let count = stream.read(&mut chunk).unwrap();
-
             assert_ne!(count, 0);
             request.extend_from_slice(&chunk[..count]);
 
@@ -58,11 +59,11 @@ fn stub(response: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
 fn json_response(body: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 200 OK\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {body}",
+            Content-Type: application/json\r\n\
+            Content-Length: {}\r\n\
+            Connection: close\r\n\
+            \r\n\
+            {body}",
         body.len()
     )
     .into_bytes()
@@ -71,7 +72,7 @@ fn json_response(body: &str) -> Vec<u8> {
 #[test]
 fn remote_list_bypasses_local_config_and_formats_sizes() {
     let body = "{\"indexes\":[{\"name\":\"app\",\"size_bytes\":1536,\"max_size_bytes\":4096,\
-                \"retention_ms\":86400000,\"ready\":true},{\"name\":\"scoped\"}]}";
+        \"retention_ms\":86400000,\"ready\":true},{\"name\":\"scoped\"}]}";
     let (url, server) = stub(json_response(body));
     let output = client(&["indexes", "list", "--url", &url])
         .env_remove("LOGBROOK_TOKEN")
@@ -80,17 +81,14 @@ fn remote_list_bypasses_local_config_and_formats_sizes() {
         .env("LOGBROOK_ADMIN_TOKEN", "synthetic-admin")
         .output()
         .unwrap();
-
     successful(&output);
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-
     assert!(stdout.contains("app"));
     assert!(stdout.contains("1.5 KiB"));
     assert!(stdout.contains("scoped"));
 
     let request = server.join().unwrap().to_lowercase();
-
     assert!(request.starts_with("get /indexes http/1.1"));
     assert!(request.contains("authorization: bearer synthetic-admin\r\n"));
 }
@@ -131,7 +129,6 @@ fn query_encodes_filters_and_preserves_cursor_in_json() {
     .env("LOGBROOK_ADMIN_TOKEN", "synthetic-admin")
     .output()
     .unwrap();
-
     successful(&output);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
@@ -140,7 +137,6 @@ fn query_encodes_filters_and_preserves_cursor_in_json() {
 
     let request = server.join().unwrap();
     let first = request.lines().next().unwrap();
-
     assert!(first.starts_with("GET /prefix/indexes/app/logs?"));
     assert!(first.contains("message=a%26source%3Dother+%2B%2F%E2%98%83"));
     assert!(first.contains("service=worker%26api"));
@@ -168,7 +164,6 @@ fn count_defaults_to_one_hour_and_explicit_token_has_precedence() {
     .env("LOGBROOK_READ_TOKEN", "synthetic-role")
     .output()
     .unwrap();
-
     successful(&output);
     assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "12");
 
@@ -233,7 +228,6 @@ fn delete_confirmation_precedes_network_and_config_is_rejected() {
     let output = client(&["--url", &url, "indexes", "delete", "app"])
         .output()
         .unwrap();
-
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--yes"));
@@ -252,7 +246,6 @@ fn delete_confirmation_precedes_network_and_config_is_rejected() {
     ])
     .output()
     .unwrap();
-
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("--config is for local commands"));
     assert_eq!(
@@ -271,11 +264,9 @@ fn delete_uses_only_admin_role_and_supports_explicit_authorization() {
         .env("LOGBROOK_ADMIN_TOKEN", "synthetic-admin")
         .output()
         .unwrap();
-
     successful(&output);
 
     let request = server.join().unwrap().to_lowercase();
-
     assert!(request.starts_with("delete /indexes/app http/1.1"));
     assert!(request.contains("authorization: bearer synthetic-admin\r\n"));
 }
@@ -320,10 +311,10 @@ fn redirect_is_not_followed_and_error_body_cannot_echo_token() {
 
     let response = format!(
         "HTTP/1.1 302 Found\r\n\
-         Location: http://{}/secret\r\n\
-         Content-Length: 0\r\n\
-         Connection: close\r\n\
-         \r\n",
+            Location: http://{}/secret\r\n\
+            Content-Length: 0\r\n\
+            Connection: close\r\n\
+            \r\n",
         destination.local_addr().unwrap()
     );
     let (url, server) = stub(response.into_bytes());
@@ -337,7 +328,6 @@ fn redirect_is_not_followed_and_error_body_cannot_echo_token() {
     ])
     .output()
     .unwrap();
-
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("302"));
@@ -352,10 +342,10 @@ fn redirect_is_not_followed_and_error_body_cannot_echo_token() {
     let (url, server) = stub(
         format!(
             "HTTP/1.1 401 Unauthorized\r\n\
-             Content-Length: {}\r\n\
-             Connection: close\r\n\
-             \r\n\
-             {body}",
+                Content-Length: {}\r\n\
+                Connection: close\r\n\
+                \r\n\
+                {body}",
             body.len()
         )
         .into_bytes(),
@@ -370,12 +360,10 @@ fn redirect_is_not_followed_and_error_body_cannot_echo_token() {
     ])
     .output()
     .unwrap();
-
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-
     assert!(stderr.contains("401"));
     assert!(!stderr.contains("synthetic-secret"));
     server.join().unwrap();
@@ -410,7 +398,6 @@ fn deadline_includes_a_stalled_response_body() {
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         let mut request = [0; 4096];
-
         assert!(stream.read(&mut request).unwrap() > 0);
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{")
@@ -421,12 +408,10 @@ fn deadline_includes_a_stalled_response_body() {
     let output = client(&["--url", &url, "--timeout", "1", "indexes", "list"])
         .output()
         .unwrap();
-
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
 
     let started = received.recv().unwrap();
-
     assert!(started.elapsed() < Duration::from_secs(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("deadline"));
     server.join().unwrap();
@@ -440,7 +425,6 @@ fn environment_url_and_json_show_are_supported() {
         .env("LOGBROOK_URL", &url)
         .output()
         .unwrap();
-
     successful(&output);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
@@ -460,7 +444,6 @@ fn credentials_stay_out_of_help_and_invalid_header_errors() {
         .env("LOGBROOK_TOKEN", "synthetic-help-secret")
         .output()
         .unwrap();
-
     assert!(output.status.success());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("synthetic-help-secret"));
 
@@ -472,7 +455,6 @@ fn credentials_stay_out_of_help_and_invalid_header_errors() {
     ])
     .output()
     .unwrap();
-
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(!String::from_utf8_lossy(&output.stderr).contains("synthetic-header-secret"));
@@ -490,7 +472,6 @@ fn delete_does_not_fall_back_to_read_or_ingest_and_query_does_not_use_admin() {
         .env("LOGBROOK_READ_TOKEN", "synthetic-read")
         .output()
         .unwrap();
-
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("LOGBROOK_ADMIN_TOKEN"));
     assert_eq!(
@@ -503,11 +484,71 @@ fn delete_does_not_fall_back_to_read_or_ingest_and_query_does_not_use_admin() {
         .env("LOGBROOK_ADMIN_TOKEN", "synthetic-admin")
         .output()
         .unwrap();
-
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("LOGBROOK_READ_TOKEN"));
     assert_eq!(
         listener.accept().unwrap_err().kind(),
         std::io::ErrorKind::WouldBlock
     );
+}
+
+#[test]
+fn query_and_count_validate_attribute_filter_and_encode_it_once() {
+    let filter = r#"{"attributes":[{"key":"run/a~b","op":"eq","value":"run +/☃&source=other"},{"key":"ok","op":"eq","value":true}]}"#;
+    for operation in ["query", "count"] {
+        let response = if operation == "query" {
+            r#"{"events":[],"next_cursor":null}"#
+        } else {
+            r#"{"count":0}"#
+        };
+        let (url, server) = stub(json_response(response));
+        let output = client(&[
+            "--url", &url, operation, "default", "--from", "1", "--to", "2", "--filter", filter,
+        ])
+        .output()
+        .unwrap();
+        successful(&output);
+
+        let request = server.join().unwrap();
+        let target = request
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap();
+        let url = reqwest::Url::parse(&format!("http://localhost{target}")).unwrap();
+        let filters: Vec<_> = url
+            .query_pairs()
+            .filter(|(key, _)| key == "filter")
+            .collect();
+        assert_eq!(filters.len(), 1);
+        assert_eq!(filters[0].1, filter);
+        assert!(!target.contains("%257B"));
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    for operation in ["query", "count"] {
+        for filter in [
+            "null",
+            "{}",
+            r#"{"attributes":[{"key":"run","op":"eq","value":null}]}"#,
+        ] {
+            let output = client(&["--url", &url, operation, "default", "--filter", filter])
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("filter"));
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+
+        let output = client(&[operation, "--help"]).output().unwrap();
+        successful(&output);
+        assert!(String::from_utf8_lossy(&output.stdout).contains("--filter"));
+    }
 }

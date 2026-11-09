@@ -1,8 +1,8 @@
-duckdb 1.10506.0: bundled source licenses
+duckdb 1.20000.1: bundled source licenses
 Upstream: https://github.com/duckdb/duckdb-rs
-Revision: 0fec186cdd4ada2f7703a2df5ee18f9f78d95f8e
+Revision: db918f65ca165828dc0277c5b02c10f8fd1c4b82
 
-Source: https://raw.githubusercontent.com/duckdb/duckdb-rs/0fec186cdd4ada2f7703a2df5ee18f9f78d95f8e/LICENSE
+Source: https://raw.githubusercontent.com/duckdb/duckdb-rs/db918f65ca165828dc0277c5b02c10f8fd1c4b82/LICENSE
 
 Copyright 2021-2026 Stichting DuckDB Foundation
 

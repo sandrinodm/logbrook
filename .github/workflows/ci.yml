@@ -18,21 +18,64 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 2
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       - name: Install pinned Rust components
-        run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - name: Check Rust
         run: |
           cargo fmt --all --check
           cargo clippy --workspace --locked --all-targets -- -D warnings
-          cargo build --locked --package logbrook
+          cargo build --workspace --locked --all-targets
           cargo test --workspace --locked --all-targets
+      - name: Verify pinned Forward clients against the native receiver
+        run: >-
+          python3 tests/tools/forward_interop.py
+          --binary target/debug/logbrook
+          --host 127.0.0.1 --network host
+          --output artifacts/forward/interop-linux.json
+      - name: Verify corrupted ACKs fail client qualification
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          for client in ["fluentd", "fluentbit"]:
+              output = Path(f"artifacts/forward/negative-ack-{client}.json")
+              result = subprocess.run([
+                  "python3", "tests/tools/forward_interop.py",
+                  "--binary", "target/debug/logbrook",
+                  "--host", "127.0.0.1", "--network", "host",
+                  "--negative-control", client, "--output", str(output),
+              ], check=False)
+              report = json.loads(output.read_text())
+              case = f"{client}_gzip_ack"
+              detected = report["cases"].get(case, {})
+              if not (
+                  result.returncode == 1 and not report["passed"]
+                  and report.get("failed_case") == case
+                  and report["negative_control"]["responses_corrupted"] > 0
+                  and (detected.get("sender_error_detected") or detected.get("sender_repeated_chunk"))
+                  and report["cleanup"]["native_exit_code"] == 0
+                  and report["cleanup"]["temporary_data_removed"]
+                  and not report["cleanup"]["errors"]
+              ):
+                  raise SystemExit(f"corrupted {client} ACKs were not detected with clean fixture shutdown")
+          PY
+      - name: Upload Forward interoperability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: forward-interop-linux
+          path: artifacts/forward/*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify dependency notices
         run: |
-          cargo install cargo-about --version 0.9.2 --locked --features cli
+          cargo install cargo-about --version 0.9.3 --locked --features cli
           cargo fetch --locked
           cargo xtask notices --check
   pino-example:
@@ -40,13 +83,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version: '26.13.0'
           cache: npm
           cache-dependency-path: examples/pino-logger/package-lock.json
       - name: Test Pino logger example
@@ -68,12 +111,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       - name: Install pinned Rust toolchain for development checks
-        run: rustup toolchain install 1.99.0 --profile minimal
+        run: rustup toolchain install 1.99.1 --profile minimal
       - name: Build native release container and attestations
         run: |
           version=$(cargo xtask version)
@@ -110,7 +153,7 @@ jobs:
       - name: Verify container index-load lifecycle
         run: cargo xtask index-load --image logbrook:ci --duration 2 --rate 200 --query-rate 10 --output artifacts/index-smoke.json
       - name: Upload OCI image with SBOM and provenance
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: logbrook-${{ matrix.architecture }}-oci
           path: /tmp/logbrook-${{ matrix.architecture }}.tar

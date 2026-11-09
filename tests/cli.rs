@@ -1,3 +1,4 @@
+//! Command-line regression tests for version reporting and disposable index operations.
 use logbrook::{config::Config, model::Query, storage::Storage};
 use std::process::Command;
 
@@ -42,7 +43,6 @@ async fn ndjson_import_accepts_event_at_body_limit_without_empty_batch_flush() {
         ])
         .output()
         .unwrap();
-
     assert!(
         result.status.success(),
         "{}",
@@ -54,7 +54,6 @@ async fn ndjson_import_accepts_event_at_body_limit_without_empty_batch_flush() {
     );
 
     let storage = Storage::open(config.for_index("default").unwrap().storage).unwrap();
-
     assert_eq!(
         storage
             .count(Query {
@@ -75,18 +74,15 @@ async fn ndjson_import_accepts_event_at_body_limit_without_empty_batch_flush() {
 fn configuration_failure_reports_diagnostics_only_on_stderr() {
     let directory = tempfile::tempdir().unwrap();
     let missing = directory.path().join("missing.toml");
-
     let result = Command::new(env!("CARGO_BIN_EXE_logbrook"))
         .args(["--config", missing.to_str().unwrap(), "check-config"])
         .env("RUST_LOG", "logbrook=error")
         .output()
         .unwrap();
-
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
 
     let diagnostic: serde_json::Value = serde_json::from_slice(&result.stderr).unwrap();
-
     assert_eq!(diagnostic["level"], "ERROR");
     assert!(
         diagnostic["fields"]["error"]
@@ -109,12 +105,12 @@ fn healthcheck_reads_only_bind_and_needs_no_credentials() {
             .unwrap();
         let mut request = [0u8; 1024];
         let count = stream.read(&mut request).unwrap();
-
         assert!(request[..count].starts_with(b"GET /ready HTTP/1.1"));
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
             .unwrap();
     });
+
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("probe.toml");
     std::fs::write(
@@ -132,12 +128,12 @@ fn healthcheck_reads_only_bind_and_needs_no_credentials() {
         .args(["--config", file.to_str().unwrap(), "healthcheck"])
         .output()
         .unwrap();
-
     assert!(
         result.status.success(),
         "{}{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
+
     stub.join().unwrap();
 }

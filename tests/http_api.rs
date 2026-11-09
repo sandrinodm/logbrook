@@ -1,3 +1,4 @@
+//! HTTP API regression tests for authentication, queries, limits and streaming.
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -34,6 +35,38 @@ fn setup_with(change: impl FnOnce(&mut Config)) -> (tempfile::TempDir, Storage, 
 
     let storage = Storage::open(config.storage.clone()).unwrap();
     (directory, storage.clone(), router(storage, config))
+}
+
+fn tail_token(after: i64, index: Option<&str>, sources: &[&str], fields: Value) -> String {
+    let mut value = json!({
+        "from": 0,
+        "to": 253_402_300_799_999_i64,
+        "sources": sources,
+        "limit": 1000,
+    });
+    value
+        .as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+
+    let mut query: logbrook::model::Query = serde_json::from_value(value).unwrap();
+    query.cursor_scope = index.map_or(logbrook::query_cursor::CursorScope::Legacy, |index| {
+        logbrook::query_cursor::CursorScope::Named(index.into())
+    });
+    logbrook::query_cursor::encode_tail(&query, after).unwrap()
+}
+
+fn encoded(value: &str) -> String {
+    let mut url = reqwest::Url::parse("http://localhost/").unwrap();
+    url.query_pairs_mut().append_pair("v", value);
+    url.query().unwrap().strip_prefix("v=").unwrap().to_owned()
+}
+
+fn frame_id(frame: &str) -> &str {
+    frame
+        .lines()
+        .find_map(|line| line.strip_prefix("id: "))
+        .expect("SSE ID")
 }
 
 async fn call(
@@ -74,7 +107,6 @@ async fn durable_ingest_normalizes_and_scopes_every_query() {
         "id": "spoof",
         "extra": { "ok": true },
     }]);
-
     let (status, result) = call(
         &app,
         "POST",
@@ -84,7 +116,6 @@ async fn durable_ingest_normalizes_and_scopes_every_query() {
         event.to_string(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["accepted"], 1);
     assert_eq!(
@@ -110,12 +141,10 @@ async fn durable_ingest_normalizes_and_scopes_every_query() {
         String::new(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["events"].as_array().unwrap().len(), 1);
 
     let event = &result["events"][0];
-
     assert_eq!(event["source"], "alpha");
     assert_eq!(event["logger"], "api");
     assert_eq!(event["attributes"]["extra"]["ok"], true);
@@ -150,7 +179,6 @@ async fn durable_ingest_normalizes_and_scopes_every_query() {
     )
     .await
     .1;
-
     assert_eq!(result["count"], 1);
 
     let result = call(
@@ -163,7 +191,6 @@ async fn durable_ingest_normalizes_and_scopes_every_query() {
     )
     .await
     .1;
-
     assert_eq!(result["count"], 2);
 
     storage.shutdown().await.unwrap();
@@ -177,7 +204,6 @@ async fn rejects_entire_invalid_batch_and_separates_credentials() {
         { "time": "wrong", "level": 30, "msg": "invalid" },
     ])
     .to_string();
-
     assert_eq!(
         call(
             &app,
@@ -230,8 +256,8 @@ async fn rejects_entire_invalid_batch_and_separates_credentials() {
     )
     .await
     .1;
-
     assert_eq!(result["count"], 0);
+
     assert_eq!(
         call(
             &app,
@@ -252,7 +278,6 @@ async fn rejects_entire_invalid_batch_and_separates_credentials() {
 #[tokio::test]
 async fn enforces_body_limit_without_content_length_and_depth() {
     let (_directory, storage, app) = setup();
-
     assert_eq!(
         call(
             &app,
@@ -269,11 +294,12 @@ async fn enforces_body_limit_without_content_length_and_depth() {
 
     let mut extra = json!(null);
     for _ in 0..20 {
-        extra = json!({ "nested": extra });
+        extra = json!({
+            "nested": extra,
+        });
     }
 
     let event = json!([{ "time": 1000, "level": 30, "msg": "too deep", "extra": extra }]);
-
     assert_eq!(
         call(
             &app,
@@ -296,7 +322,6 @@ async fn tail_resumes_by_ingestion_id_and_limits_subscribers() {
     use http_body_util::BodyExt;
 
     let (_directory, storage, app) = setup();
-
     assert_eq!(
         call(
             &app,
@@ -314,11 +339,10 @@ async fn tail_resumes_by_ingestion_id_and_limits_subscribers() {
     let request = Request::builder()
         .uri("/logs/tail")
         .header("authorization", "Bearer reader-token-123456")
-        .header("last-event-id", "0")
+        .header("last-event-id", tail_token(0, None, &["alpha"], json!({})))
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"], "text/event-stream");
 
@@ -329,10 +353,9 @@ async fn tail_resumes_by_ingestion_id_and_limits_subscribers() {
         .unwrap()
         .unwrap();
     let data = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
-
     assert!(data.contains("event: log"));
     assert!(data.contains("late arrival"));
-    assert!(data.contains("id: 1"));
+    assert_eq!(frame_id(&data), tail_token(1, None, &["alpha"], json!({})));
     drop(body);
 
     let mut subscribers = Vec::new();
@@ -343,7 +366,6 @@ async fn tail_resumes_by_ingestion_id_and_limits_subscribers() {
             .body(Body::empty())
             .unwrap();
         let response = app.clone().oneshot(request).await.unwrap();
-
         assert_eq!(response.status(), StatusCode::OK);
         subscribers.push(response);
     }
@@ -357,7 +379,6 @@ async fn tail_resumes_by_ingestion_id_and_limits_subscribers() {
         String::new(),
     )
     .await;
-
     assert_eq!(response.0, StatusCode::TOO_MANY_REQUESTS);
     drop(subscribers);
 
@@ -380,7 +401,6 @@ async fn streamed_body_limit_and_decoded_admission_are_bounded() {
         .header("authorization", "Bearer producer-token-123456")
         .body(Body::from_stream(chunks))
         .unwrap();
-
     assert_eq!(
         app.clone().oneshot(request).await.unwrap().status(),
         StatusCode::PAYLOAD_TOO_LARGE
@@ -469,7 +489,6 @@ async fn archived_events_keep_read_scope_and_tail_replays_pages_and_shutdown() {
         String::new(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(count["count"], 2);
 
@@ -483,14 +502,13 @@ async fn archived_events_keep_read_scope_and_tail_replays_pages_and_shutdown() {
     };
     let mut replay = app
         .clone()
-        .oneshot(tail_request("0"))
+        .oneshot(tail_request(&tail_token(0, None, &["alpha"], json!({}))))
         .await
         .unwrap()
         .into_body();
     for _ in 0..2 {
         let frame = replay.frame().await.unwrap().unwrap().into_data().unwrap();
         let frame = String::from_utf8(frame.to_vec()).unwrap();
-
         assert!(frame.contains("event: log"));
         assert!(!frame.contains("gap"));
         assert!(frame.contains("alpha"));
@@ -500,17 +518,17 @@ async fn archived_events_keep_read_scope_and_tail_replays_pages_and_shutdown() {
 
     let mut body = app
         .clone()
-        .oneshot(tail_request("4"))
+        .oneshot(tail_request(&tail_token(4, None, &["alpha"], json!({}))))
         .await
         .unwrap()
         .into_body();
     let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
-
     assert!(
         String::from_utf8(frame.to_vec())
             .unwrap()
             .contains("event: cursor")
     );
+
     storage.stop_admission();
 
     assert!(
@@ -550,12 +568,12 @@ async fn retention_expiry_emits_terminal_gap_and_metrics_count_writer_commits() 
         .await
         .unwrap();
     let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
-
     assert!(
         String::from_utf8(bytes.to_vec())
             .unwrap()
             .contains("logbrook_ingested_events_total 2\n")
     );
+
     storage.retain(10).await.unwrap();
 
     let mut body = app
@@ -564,7 +582,7 @@ async fn retention_expiry_emits_terminal_gap_and_metrics_count_writer_commits() 
             Request::builder()
                 .uri("/logs/tail")
                 .header("authorization", "Bearer reader-token-123456")
-                .header("last-event-id", "0")
+                .header("last-event-id", tail_token(0, None, &["alpha"], json!({})))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -573,7 +591,6 @@ async fn retention_expiry_emits_terminal_gap_and_metrics_count_writer_commits() 
         .into_body();
     let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
     let frame = String::from_utf8(frame.to_vec()).unwrap();
-
     assert!(frame.contains("event: gap"));
     assert!(frame.contains("expired by retention"));
     assert!(body.frame().await.is_none());
@@ -639,7 +656,6 @@ async fn live_timestamps_security_and_endpoint_contracts() {
         } else {
             format!("{path}?from={}&to={}&{irrelevant}", now - 1000, now + 1000)
         };
-
         assert_eq!(
             call(
                 &app,
@@ -680,7 +696,6 @@ async fn live_timestamps_security_and_endpoint_contracts() {
         )
         .await
         .unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-content-type-options"], "nosniff");
     assert_eq!(response.headers()["x-frame-options"], "DENY");
@@ -698,7 +713,6 @@ async fn live_timestamps_security_and_endpoint_contracts() {
             .to_vec(),
     )
     .unwrap();
-
     assert!(text.contains("# TYPE logbrook_http_duration_seconds histogram"));
     assert!(text.contains("endpoint=\"/logs/ingest\""));
 
@@ -727,7 +741,6 @@ async fn chunked_idle_requests_do_not_monopolize_default_memory_and_timeout_rele
         .header("authorization", "Bearer producer-token-123456")
         .body(Body::from_stream(chunks))
         .unwrap();
-
     assert_eq!(
         app.clone().oneshot(request).await.unwrap().status(),
         StatusCode::OK
@@ -781,13 +794,24 @@ async fn tail_replays_three_thousand_matching_events_without_backlog_gaps() {
             Request::builder()
                 .uri("/logs/tail?service=wanted&message=match&min_level=30")
                 .header("authorization", "Bearer reader-token-123456")
-                .header("last-event-id", "0")
+                .header(
+                    "last-event-id",
+                    tail_token(
+                        0,
+                        None,
+                        &["alpha"],
+                        json!({
+                            "service": "wanted",
+                            "message": "match",
+                            "min_level": 30,
+                        }),
+                    ),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
 
     let mut body = response.into_body();
@@ -800,9 +824,20 @@ async fn tail_replays_three_thousand_matching_events_without_backlog_gaps() {
             .into_data()
             .unwrap();
         let frame = String::from_utf8(frame.to_vec()).unwrap();
-
         assert!(frame.contains("event: log"), "{frame}");
-        assert!(frame.contains(&format!("id: {expected}\n")), "{frame}");
+        assert_eq!(
+            frame_id(&frame),
+            tail_token(
+                expected,
+                None,
+                &["alpha"],
+                json!({
+                    "service": "wanted",
+                    "message": "match",
+                    "min_level": 30,
+                })
+            )
+        );
         assert!(!frame.contains("hidden"));
     }
 
@@ -827,6 +862,7 @@ async fn checked_openapi_matches_endpoint_parameter_acceptance() {
             .iter()
             .map(|p| p["name"].as_str().unwrap())
             .collect::<Vec<_>>();
+        assert!(names.contains(&"filter"));
         for field in ["limit", "cursor", "interval_ms"] {
             assert_eq!(names.contains(&field), extras.contains(&field));
 
@@ -881,9 +917,7 @@ async fn concurrent_full_limit_chunked_bodies_are_admitted_with_default_budgets(
             .body(Body::from_stream(chunks))
             .unwrap()
     };
-
     let (first, second) = tokio::join!(app.clone().oneshot(make()), app.clone().oneshot(make()));
-
     assert_eq!(first.unwrap().status(), StatusCode::OK);
     assert_eq!(second.unwrap().status(), StatusCode::OK);
     assert_eq!(storage.committed_events(), 2);
@@ -911,7 +945,6 @@ fn assert_contract(value: &Value, schema: &Value, spec: &Value) {
             "null" => value.is_null(),
             other => panic!("unvalidated contract type {other}"),
         };
-
         assert!(
             if let Some(kinds) = kind.as_array() {
                 kinds.iter().any(|kind| matches(kind.as_str().unwrap()))
@@ -950,18 +983,21 @@ fn assert_contract(value: &Value, schema: &Value, spec: &Value) {
 async fn successful_and_error_responses_match_checked_openapi_schemas() {
     let (_directory, storage, app) = setup();
     let spec: Value = serde_json::from_str(include_str!("../src/openapi.json")).unwrap();
-
     let (status, accepted) = call(
         &app,
         "POST",
         "/logs/ingest",
         "producer-token-123456",
         "application/json",
-        json!([{ "time": 1000, "level": 30, "msg": "schema", "service": "api", "extra": [1, true] }])
-            .to_string(),
+        json!([{ "time": 1000,
+            "level": 30,
+            "msg": "schema",
+            "service": "api",
+            "extra": [1,
+            true] }])
+        .to_string(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_contract(
         &accepted,
@@ -979,7 +1015,6 @@ async fn successful_and_error_responses_match_checked_openapi_schemas() {
             String::new(),
         )
         .await;
-
         assert_eq!(status, StatusCode::OK);
         assert_contract(
             &value,
@@ -997,7 +1032,6 @@ async fn successful_and_error_responses_match_checked_openapi_schemas() {
         String::new(),
     )
     .await;
-
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_contract(&error, &spec["components"]["schemas"]["Error"], &spec);
 
@@ -1014,7 +1048,6 @@ async fn ingest_alias_documents_and_returns_the_named_route_size_limit_response(
     let named = spec["paths"]["/indexes/{index}/logs/ingest"]["post"]["responses"]
         .as_object()
         .unwrap();
-
     // A named route additionally reports missing indexes. Shared ingest outcomes
     // must retain the same documented status and body contract on the alias.
     for (status, response) in named.iter().filter(|(status, _)| *status != "404") {
@@ -1037,12 +1070,10 @@ async fn ingest_alias_documents_and_returns_the_named_route_size_limit_response(
             json!([{ "time": 1000, "level": 30, "msg": "size limited" }]).to_string(),
         )
         .await;
-
         assert_eq!(status, StatusCode::INSUFFICIENT_STORAGE);
 
         let schema = &spec["paths"][documented]["post"]["responses"]["507"]["content"]["application/json"]
             ["schema"];
-
         assert_eq!(schema["$ref"], "#/components/schemas/Error");
         assert_contract(&error, schema, &spec);
     }
@@ -1078,13 +1109,13 @@ async fn live_admission_honors_persisted_retention_cutoff_atomically() {
         .to_string(),
     )
     .await;
-
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         storage.committed_events(),
         0,
         "mixed live batch must remain atomic"
     );
+
     assert_eq!(
         call(
             &app,
@@ -1120,7 +1151,6 @@ async fn filtered_tail_wakes_on_commit_and_detects_retention_during_stream() {
         .unwrap();
     let mut body = response.into_body();
     let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
-
     assert!(
         String::from_utf8(frame.to_vec())
             .unwrap()
@@ -1129,7 +1159,7 @@ async fn filtered_tail_wakes_on_commit_and_detects_retention_during_stream() {
 
     let events = logbrook::ingest::normalize(
         b"[{\"time\":1,\"level\":30,\"msg\":\"visible\",\"service\":\"wanted\"},\
-          {\"time\":100,\"level\":30,\"msg\":\"hidden\",\"service\":\"other\"}]",
+            {\"time\":100,\"level\":30,\"msg\":\"hidden\",\"service\":\"other\"}]",
         false,
         &Config::default(),
     )
@@ -1144,7 +1174,6 @@ async fn filtered_tail_wakes_on_commit_and_detects_retention_during_stream() {
         .into_data()
         .unwrap();
     let frame = String::from_utf8(frame.to_vec()).unwrap();
-
     assert!(frame.contains("visible"));
     assert!(!frame.contains("hidden"));
 
@@ -1165,7 +1194,6 @@ async fn filtered_tail_wakes_on_commit_and_detects_retention_during_stream() {
         .unwrap()
         .into_data()
         .unwrap();
-
     assert!(
         String::from_utf8(frame.to_vec())
             .unwrap()
@@ -1205,7 +1233,6 @@ async fn histogram_bucket_limit_counts_fractional_final_bucket_consistently() {
             limit: 1,
             ..Default::default()
         };
-
         let result = storage.histogram(query, 10).await;
         if expected == StatusCode::OK {
             assert!(result.is_ok());
@@ -1242,7 +1269,6 @@ async fn ingested_metric(app: &Router) -> u64 {
         )
         .await
         .unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
 
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
@@ -1279,7 +1305,6 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         &config,
     )
     .unwrap();
-
     // Commits before router creation and outside HTTP must count too.
     registry
         .get("default")
@@ -1288,8 +1313,8 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         .append("alpha".into(), events.clone())
         .await
         .unwrap();
-    let app = router_with_registry(registry.clone(), config.clone());
 
+    let app = router_with_registry(registry.clone(), config.clone());
     assert_eq!(ingested_metric(&app).await, 1);
 
     let (status, accepted) = index_call(
@@ -1298,13 +1323,16 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         "/indexes/payments/logs/ingest",
         "producer-token-123456",
         json!(vec![
-            json!({ "time": 1000, "level": 30, "msg": "indexed" });
+            json!({
+                "time": 1000,
+                "level": 30,
+                "msg": "indexed",
+            });
             10
         ])
         .to_string(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(accepted["accepted"], 10);
     assert_eq!(ingested_metric(&app).await, 11);
@@ -1328,6 +1356,7 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         }
         accepted
     };
+
     let deleting = index_call(
         &app,
         "DELETE",
@@ -1336,12 +1365,10 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         String::new(),
     );
     let (committed_during_delete, (status, _)) = tokio::join!(writing, deleting);
-
     assert_eq!(status, StatusCode::OK);
     assert!(registry.get("payments").is_none());
 
     let total = 11 + committed_during_delete;
-
     assert_eq!(ingested_metric(&app).await, total);
     assert!(payments.append("alpha".into(), events).await.is_err());
 
@@ -1353,7 +1380,6 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         json!([{ "time": 2000, "level": 30, "msg": "recreated" }]).to_string(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(accepted["accepted"], 1);
     assert_eq!(ingested_metric(&app).await, total + 1);
@@ -1364,7 +1390,6 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
 
     let restarted = IndexRegistry::open(config.clone()).await.unwrap();
     let restarted_app = router_with_registry(restarted.clone(), config);
-
     assert_eq!(ingested_metric(&restarted_app).await, 0);
 
     let (_, retained) = index_call(
@@ -1375,7 +1400,6 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         String::new(),
     )
     .await;
-
     assert_eq!(retained["count"], 1, "persisted rows are not new commits");
 
     let (status, _) = index_call(
@@ -1386,7 +1410,6 @@ async fn ingested_metric_survives_index_deletion_recreation_and_resets_on_restar
         json!([{ "time": 2000, "level": 30, "msg": "new process" }]).to_string(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(ingested_metric(&restarted_app).await, 1);
 
@@ -1444,9 +1467,13 @@ async fn index_management_scopes_sizes_and_deletion() {
             String::new(),
         )
         .await;
-
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info, json!({ "name": name }));
+        assert_eq!(
+            info,
+            json!({
+                "name": name,
+            })
+        );
         assert_eq!(
             index_call(
                 &app,
@@ -1475,7 +1502,6 @@ async fn index_management_scopes_sizes_and_deletion() {
         String::new(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(info["name"], "payments");
     assert_eq!(info["max_size_bytes"], Value::Null);
@@ -1496,8 +1522,8 @@ async fn index_management_scopes_sizes_and_deletion() {
     .iter()
     .map(|field| info[field].as_u64().unwrap())
     .sum();
-
     assert_eq!(info["size_bytes"], total);
+
     std::fs::write(root.join("unknown.bin"), b"123456789").unwrap();
 
     let (_, fresh) = index_call(
@@ -1508,7 +1534,6 @@ async fn index_management_scopes_sizes_and_deletion() {
         String::new(),
     )
     .await;
-
     assert_eq!(
         fresh["other_bytes"], 9,
         "information must refresh physical files without a size target"
@@ -1520,11 +1545,9 @@ async fn index_management_scopes_sizes_and_deletion() {
         "reader-index-1234567",
     ] {
         let (status, listing) = index_call(&app, "GET", "/indexes", token, String::new()).await;
-
         assert_eq!(status, StatusCode::OK);
 
         let entries = listing["indexes"].as_array().unwrap();
-
         assert!(
             entries
                 .iter()
@@ -1535,7 +1558,6 @@ async fn index_management_scopes_sizes_and_deletion() {
             .iter()
             .find(|entry| entry["name"] == "payments")
             .unwrap();
-
         assert_eq!(payments["other_bytes"], 9);
 
         if token == "reader-index-1234567" {
@@ -1547,7 +1569,6 @@ async fn index_management_scopes_sizes_and_deletion() {
                 .iter()
                 .find(|entry| entry["name"] == "configured")
                 .unwrap();
-
             assert_eq!(configured["max_size_bytes"], 64 * 1024 * 1024);
         }
     }
@@ -1562,7 +1583,9 @@ async fn index_management_scopes_sizes_and_deletion() {
         )
         .await
         .1,
-        json!({ "indexes": [{ "name": "payments" }] })
+        json!({
+            "indexes": [{ "name": "payments" }],
+        })
     );
 
     assert_eq!(
@@ -1575,7 +1598,9 @@ async fn index_management_scopes_sizes_and_deletion() {
         )
         .await
         .1,
-        json!({ "name": "payments" })
+        json!({
+            "name": "payments",
+        })
     );
 
     assert_eq!(
@@ -1625,7 +1650,6 @@ async fn index_management_scopes_sizes_and_deletion() {
             String::new(),
         )
         .await;
-
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(error["error"].as_str().unwrap().contains(name));
         assert!(registry.get(name).is_some());
@@ -1689,9 +1713,13 @@ async fn index_management_scopes_sizes_and_deletion() {
         String::new(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(deleted, json!({ "deleted": "payments" }));
+    assert_eq!(
+        deleted,
+        json!({
+            "deleted": "payments",
+        })
+    );
     assert!(registry.get("payments").is_none());
     assert!(!root.exists());
     assert_eq!(
@@ -1715,7 +1743,6 @@ async fn index_management_scopes_sizes_and_deletion() {
         String::new(),
     )
     .await;
-
     assert!(
         !listing["indexes"]
             .as_array()
@@ -1795,7 +1822,6 @@ async fn named_indexes_isolate_data_scopes_and_cursors() {
 
     let registry = IndexRegistry::open(config.clone()).await.unwrap();
     let app = router_with_registry(registry.clone(), config);
-
     assert_eq!(
         index_call(
             &app,
@@ -1877,11 +1903,9 @@ async fn named_indexes_isolate_data_scopes_and_cursors() {
             String::new(),
         )
         .await;
-
         assert_eq!(page["events"][0]["message"], name);
 
         let cursor = page["next_cursor"].as_str().unwrap();
-
         assert!(cursor.starts_with(&format!("{name}:")));
 
         let other = if name == "payments" {
@@ -1889,7 +1913,6 @@ async fn named_indexes_isolate_data_scopes_and_cursors() {
         } else {
             "payments"
         };
-
         assert_eq!(
             index_call(
                 &app,
@@ -1912,8 +1935,12 @@ async fn named_indexes_isolate_data_scopes_and_cursors() {
         String::new(),
     )
     .await;
-
-    assert_eq!(names, json!({ "indexes": [{ "name": "payments" }] }));
+    assert_eq!(
+        names,
+        json!({
+            "indexes": [{ "name": "payments" }],
+        })
+    );
     assert_eq!(
         index_call(
             &app,
@@ -1971,24 +1998,29 @@ async fn named_indexes_isolate_data_scopes_and_cursors() {
     let request = Request::builder()
         .uri("/indexes/payments/logs/tail")
         .header("authorization", "Bearer admin-token-1234567")
-        .header("last-event-id", "orders:1")
+        .header(
+            "last-event-id",
+            tail_token(0, Some("orders"), &[], json!({})),
+        )
         .body(Body::empty())
         .unwrap();
-
     assert_eq!(
         app.clone().oneshot(request).await.unwrap().status(),
         StatusCode::BAD_REQUEST
     );
+
     use http_body_util::BodyExt;
 
     let request = Request::builder()
         .uri("/indexes/payments/logs/tail")
         .header("authorization", "Bearer admin-token-1234567")
-        .header("last-event-id", "payments:0")
+        .header(
+            "last-event-id",
+            tail_token(0, Some("payments"), &[], json!({})),
+        )
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
 
     let mut body = response.into_body();
@@ -2000,17 +2032,18 @@ async fn named_indexes_isolate_data_scopes_and_cursors() {
         .into_data()
         .unwrap();
     let frame = String::from_utf8(frame.to_vec()).unwrap();
-
     assert!(frame.contains("id: payments:"));
     assert!(frame.contains("event: log"));
 
     let competing = Request::builder()
         .uri("/indexes/orders/logs/tail")
         .header("authorization", "Bearer admin-token-1234567")
-        .header("last-event-id", "orders:0")
+        .header(
+            "last-event-id",
+            tail_token(0, Some("orders"), &[], json!({})),
+        )
         .body(Body::empty())
         .unwrap();
-
     assert_eq!(
         app.clone().oneshot(competing).await.unwrap().status(),
         StatusCode::TOO_MANY_REQUESTS
@@ -2038,7 +2071,6 @@ async fn unknown_endpoints_return_json_and_openapi_remains_available() {
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
             .await
             .unwrap();
-
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         assert_eq!(response.headers()["content-type"], "application/json");
         assert_eq!(response.headers()["x-content-type-options"], "nosniff");
@@ -2046,7 +2078,6 @@ async fn unknown_endpoints_return_json_and_openapi_remains_available() {
 
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let result: Value = serde_json::from_slice(&bytes).unwrap();
-
         assert_eq!(result["error"], format!("unknown endpoint: {path}"));
     }
 
@@ -2059,9 +2090,949 @@ async fn unknown_endpoints_return_json_and_openapi_remains_available() {
         String::new(),
     )
     .await;
-
     assert_eq!(status, StatusCode::OK);
     assert!(document["openapi"].is_string());
     assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(document["paths"]["/logs"].is_object());
+}
+
+#[tokio::test]
+async fn attribute_filters_have_route_and_endpoint_parity() {
+    use http_body_util::BodyExt;
+
+    let (_directory, storage, app) = setup();
+    let events = json!([
+        {"time":1000,
+            "level":40,
+            "name":"api",
+            "hostname":"node",
+            "service":"jobs",
+            "msg":"match",
+            "runId":"run +/☃",
+            "ok":true,
+            "attempt":123,
+            "a/b~c.d": "literal"},
+        {"time":1001,
+            "level":40,
+            "name":"api",
+            "hostname":"node",
+            "service":"jobs",
+            "msg":"wrong string",
+            "runId":"run +/☃",
+            "ok":"true",
+            "attempt":123},
+        {"time":1002,
+            "level":40,
+            "name":"api",
+            "hostname":"node",
+            "service":"jobs",
+            "msg":"wrong number",
+            "runId":"run +/☃",
+            "ok":true,
+            "attempt":"123"},
+        {"time":1003,
+            "level":30,
+            "name":"api",
+            "hostname":"node",
+            "service":"jobs",
+            "msg":"wrong severity",
+            "runId":"run +/☃",
+            "ok":true,
+            "attempt":123,
+            "a/b~c.d": "literal"},
+        {"time":1004,
+            "level":40,
+            "name":"api",
+            "hostname":"node",
+            "service":"jobs",
+            "msg":"wrong run",
+            "runId":"other",
+            "ok":true,
+            "attempt":123},
+        {"time":1005,"level":40,"msg":"null","runId":null,"ok":true,"attempt":123}
+    ]);
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/logs/ingest",
+            "producer-token-123456",
+            "application/json",
+            events.to_string()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let filter = json!({
+        "attributes": [
+                                {"key":"runId","op":"eq","value":"run +/☃"},
+                                {"key":"ok","op":"eq","value":true},
+                                {"key":"attempt","op":"eq","value":123.0},
+                                {"key":"a/b~c.d","op":"eq","value":"literal"}
+                            ],
+    });
+    let selection = format!(
+        "service=jobs&logger=api&host=node&min_level=40&filter={}",
+        encoded(&filter.to_string())
+    );
+    for prefix in ["", "/indexes/default"] {
+        for endpoint in ["", "/count", "/facets", "/histogram"] {
+            let path = format!("{prefix}/logs{endpoint}?from=0&to=2000&{selection}");
+            let (status, result) = call(
+                &app,
+                "GET",
+                &path,
+                "reader-token-123456",
+                "application/json",
+                String::new(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{path}: {result}");
+            match endpoint {
+                "" => assert_eq!(result["events"][0]["message"], "match"),
+                "/count" => assert_eq!(result["count"], 1),
+                "/facets" => {
+                    for dimension in ["services", "loggers", "hosts", "levels", "sources"] {
+                        assert_eq!(result[dimension][0]["count"], 1);
+                    }
+                }
+                _ => assert_eq!(
+                    result["buckets"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|bucket| bucket["count"].as_u64().unwrap())
+                        .sum::<u64>(),
+                    1
+                ),
+            }
+        }
+
+        let token = tail_token(
+            0,
+            (!prefix.is_empty()).then_some("default"),
+            &["alpha"],
+            json!({
+                "service": "jobs",
+                "logger": "api",
+                "host": "node",
+                "min_level": 40,
+                "attributes": filter,
+            }),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{prefix}/logs/tail?{selection}"))
+                    .header("authorization", "Bearer reader-token-123456")
+                    .header("last-event-id", token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body();
+        let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        let frame = String::from_utf8(frame.to_vec()).unwrap();
+        assert!(frame.contains("event: log"), "{frame}");
+        assert!(frame.contains("match"), "{frame}");
+        assert!(
+            !frame_id(&frame)
+                .chars()
+                .all(|character| character.is_ascii_digit())
+        );
+        drop(body);
+    }
+
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn attribute_filter_validation_and_raw_target_limits_precede_execution() {
+    let (_directory, storage, app) = setup_with(|config| config.max_field_bytes = 64);
+    for prefix in ["", "/indexes/default"] {
+        for endpoint in ["", "/count", "/facets", "/histogram", "/tail"] {
+            let base = if endpoint == "/tail" {
+                String::new()
+            } else {
+                "from=0&to=2000&".into()
+            };
+            for filter in [
+                "",
+                "null",
+                "{}",
+                r#"{"attributes":[],"attributes":[]}"#,
+                r#"{"attributes":[{"key":"runId","op":"ne","value":"secret"}]}"#,
+                r#"{"attributes":[{"key":"runId","op":"eq","value":null}]}"#,
+                r#"{"attributes":[],"extra":true}"#,
+            ] {
+                let path = format!("{prefix}/logs{endpoint}?{base}filter={}", encoded(filter));
+                let (status, result) = call(
+                    &app,
+                    "GET",
+                    &path,
+                    "reader-token-123456",
+                    "application/json",
+                    String::new(),
+                )
+                .await;
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {result}");
+                assert!(!result["error"].as_str().unwrap().contains("secret"));
+            }
+
+            let duplicate = format!(
+                "{prefix}/logs{endpoint}?{base}filter=%7B%22attributes%22%3A%5B%5D%7D\
+                    &filter=%7B%22attributes%22%3A%5B%5D%7D"
+            );
+            assert_eq!(
+                call(
+                    &app,
+                    "GET",
+                    &duplicate,
+                    "reader-token-123456",
+                    "application/json",
+                    String::new()
+                )
+                .await
+                .0,
+                StatusCode::BAD_REQUEST
+            );
+
+            let denied = format!(
+                "{prefix}/logs{endpoint}?{base}source=beta&filter=%7B%22attributes%22%3A%5B%5D%7D"
+            );
+            assert_eq!(
+                call(
+                    &app,
+                    "GET",
+                    &denied,
+                    "reader-token-123456",
+                    "application/json",
+                    String::new()
+                )
+                .await
+                .0,
+                StatusCode::FORBIDDEN
+            );
+
+            // No filter is needed to trigger the encoded request-target limit.
+            let mut path = format!("{prefix}/logs{endpoint}?{base}message=");
+            path.push_str(&"x".repeat(32_769 - path.len()));
+            let (status, result) = call(
+                &app,
+                "GET",
+                &path,
+                "reader-token-123456",
+                "application/json",
+                String::new(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(result["error"], "request target exceeds 32768 bytes");
+        }
+    }
+
+    // The exact encoded-target boundary reaches endpoint validation.
+    let mut path = "/logs/count?from=0&to=2000&message=".to_owned();
+    path.push_str(&"x".repeat(32_768 - path.len()));
+    let (status, result) = call(
+        &app,
+        "GET",
+        &path,
+        "reader-token-123456",
+        "application/json",
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(result["error"], "query field exceeds limit");
+
+    for cursor in ["0".to_owned(), "1:2:3".to_owned(), "a".repeat(1025)] {
+        let path = format!("/logs?from=0&to=2000&cursor={}", encoded(&cursor));
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                &path,
+                "reader-token-123456",
+                "application/json",
+                String::new()
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/logs/tail")
+                    .header("authorization", "Bearer reader-token-123456")
+                    .header("last-event-id", cursor)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["content-type"], "application/json");
+    }
+
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn search_cursors_bind_effective_filters_and_accept_equivalent_selections() {
+    let (_directory, storage, app) = setup_with(|config| config.max_field_bytes = 8);
+    let events = json!([
+        {"time":100,"level":40,"msg":"same","service":"jobs","runId":1,"ok":true},
+        {"time":200,"level":40,"msg":"same","service":"jobs","runId":1,"ok":true},
+        {"time":300,"level":40,"msg":"same","service":"jobs","runId":1,"ok":true}
+    ]);
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/logs/ingest",
+            "producer-token-123456",
+            "application/json",
+            events.to_string()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let filter = r#"{"attributes":[{"key":"runId","op":"eq","value":1},{"key":"ok","op":"eq","value":true}]}"#;
+    let path = format!(
+        "/logs?from=0&to=1000&limit=1&service=jobs&filter={}",
+        encoded(filter)
+    );
+    let (status, first) = call(
+        &app,
+        "GET",
+        &path,
+        "reader-token-123456",
+        "application/json",
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let token = encoded(first["next_cursor"].as_str().unwrap());
+    let equivalent = r#"{"attributes":[{"key":"ok","op":"eq","value":true},{"key":"runId","op":"eq","value":1.0},{"key":"runId","op":"eq","value":1e0}]}"#;
+    let path = format!(
+        "/logs?from=0&to=1000&limit=1&service=jobs&source=alpha,alpha&filter={}&cursor={token}",
+        encoded(equivalent)
+    );
+    let (status, second) = call(
+        &app,
+        "GET",
+        &path,
+        "reader-token-123456",
+        "application/json",
+        String::new(),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "cursor must not use max_field_bytes: {second}"
+    );
+    assert_ne!(first["events"][0]["id"], second["events"][0]["id"]);
+
+    for changed in [
+        "from=1&to=1000&limit=1&service=jobs".to_owned(),
+        "from=0&to=1001&limit=1&service=jobs".to_owned(),
+        "from=0&to=1000&limit=2&service=jobs".to_owned(),
+        "from=0&to=1000&limit=1&service=other".to_owned(),
+        "from=0&to=1000&limit=1&service=jobs&logger=api".to_owned(),
+        "from=0&to=1000&limit=1&service=jobs&host=node".to_owned(),
+        "from=0&to=1000&limit=1&service=jobs&message=same".to_owned(),
+        "from=0&to=1000&limit=1&service=jobs&min_level=30".to_owned(),
+    ] {
+        let path = format!("/logs?{changed}&filter={}&cursor={token}", encoded(filter));
+        let (status, result) = call(
+            &app,
+            "GET",
+            &path,
+            "reader-token-123456",
+            "application/json",
+            String::new(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {result}");
+        assert!(result["error"].as_str().unwrap().contains("match query"));
+    }
+
+    let path = format!(
+        "/indexes/default/logs?from=0&to=1000&limit=1&service=jobs&filter={}&cursor={token}",
+        encoded(filter)
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &path,
+            "reader-token-123456",
+            "application/json",
+            String::new()
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    for value in [json!("1"), json!(2)] {
+        let changed = json!({
+            "attributes": [{"key":"runId",
+                                                "op":"eq",
+                                                "value":value},
+                                                {"key":"ok",
+                                                "op":"eq",
+                                                "value":true}],
+        });
+        let path = format!(
+            "/logs?from=0&to=1000&limit=1&service=jobs&filter={}&cursor={token}",
+            encoded(&changed.to_string())
+        );
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                &path,
+                "reader-token-123456",
+                "application/json",
+                String::new()
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn attribute_tail_checkpoints_resume_logs_and_reject_changed_queries() {
+    use http_body_util::BodyExt;
+
+    let (_directory, storage, app) = setup_with(|config| config.tail_poll_ms = 10_000);
+    let filter = r#"{"attributes":[{"key":"runId","op":"eq","value":"run-1"}]}"#;
+    let path = format!("/logs/tail?filter={}", encoded(filter));
+    let request = |token: Option<&str>| {
+        let mut request = Request::builder()
+            .uri(&path)
+            .header("authorization", "Bearer reader-token-123456");
+        if let Some(token) = token {
+            request = request.header("last-event-id", token);
+        }
+        request.body(Body::empty()).unwrap()
+    };
+    let response = app.clone().oneshot(request(None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body();
+    let checkpoint = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    let checkpoint = String::from_utf8(checkpoint.to_vec()).unwrap();
+    assert!(checkpoint.contains("event: cursor"));
+
+    // Only nonmatching events arrive. Their committed IDs still advance the checkpoint.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/logs/ingest",
+            "producer-token-123456",
+            "application/json",
+            json!([{"time":100,"level":30,"msg":"hidden","runId":"other"}]).to_string()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let checkpoint = tokio::time::timeout(std::time::Duration::from_millis(500), stream.frame())
+        .await
+        .expect("commit wakes filtered stream")
+        .unwrap()
+        .unwrap()
+        .into_data()
+        .unwrap();
+    let checkpoint = String::from_utf8(checkpoint.to_vec()).unwrap();
+    assert!(checkpoint.contains("event: cursor"));
+    let checkpoint = frame_id(&checkpoint).to_owned();
+    assert_eq!(
+        checkpoint,
+        tail_token(
+            1,
+            None,
+            &["alpha"],
+            json!({
+                "attributes": serde_json::from_str::<Value>(filter).unwrap(),
+            })
+        )
+    );
+    drop(stream);
+
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/logs/ingest",
+            "producer-token-123456",
+            "application/json",
+            json!([
+                {"time":50,"level":30,"msg":"late first","runId":"run-1"},
+                {"time":200,"level":30,"msg":"hidden again","runId":"other"},
+                {"time":10,"level":30,"msg":"late second","runId":"run-1"}
+            ])
+            .to_string()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let response = app
+        .clone()
+        .oneshot(request(Some(&checkpoint)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body();
+    let first = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    let first = String::from_utf8(first.to_vec()).unwrap();
+    assert!(first.contains("late first"));
+    let first_token = frame_id(&first).to_owned();
+    drop(stream);
+
+    // Resume from an individual log, then from the caught-up checkpoint, with no duplicate.
+    let response = app
+        .clone()
+        .oneshot(request(Some(&first_token)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body();
+    let second = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    let second = String::from_utf8(second.to_vec()).unwrap();
+    assert!(second.contains("late second"));
+    assert!(!second.contains("late first"));
+    let last = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    let last = String::from_utf8(last.to_vec()).unwrap();
+    assert!(last.contains("event: cursor"));
+    drop(stream);
+
+    let response = app
+        .clone()
+        .oneshot(request(Some(frame_id(&last))))
+        .await
+        .unwrap();
+    let mut stream = response.into_body();
+    let frame = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert!(
+        String::from_utf8(frame.to_vec())
+            .unwrap()
+            .contains("event: cursor")
+    );
+    drop(stream);
+
+    let changed = format!(
+        "/logs/tail?filter={}",
+        encoded(&filter.replace("run-1", "run-2"))
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(changed)
+                .header("authorization", "Bearer reader-token-123456")
+                .header("last-event-id", &first_token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["content-type"], "application/json");
+
+    let search = format!("/logs?from=0&to=1000&cursor={}", encoded(&first_token));
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &search,
+            "reader-token-123456",
+            "application/json",
+            String::new()
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn tail_pending_byte_budget_counts_full_tokens_and_bounds_terminal_frames() {
+    use http_body_util::BodyExt;
+
+    let (_directory, storage, app) = setup();
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/logs/ingest",
+            "producer-token-123456",
+            "application/json",
+            json!([{"time":100,"level":30,"msg":"one"}]).to_string()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let (_, page) = call(
+        &app,
+        "GET",
+        "/logs?from=0&to=1000",
+        "reader-token-123456",
+        "application/json",
+        String::new(),
+    )
+    .await;
+    let token = tail_token(1, None, &["alpha"], json!({}));
+    let exact_bytes = page["events"][0].to_string().len() + token.len() + 24;
+
+    let budget_router = |budget| {
+        let mut config = Config::default();
+        config
+            .read_tokens
+            .insert("reader-token-123456".into(), vec!["alpha".into()]);
+        config.max_tail_buffer_bytes = budget;
+        router(storage.clone(), config)
+    };
+
+    let request = || {
+        Request::builder()
+            .uri("/logs/tail")
+            .header("authorization", "Bearer reader-token-123456")
+            .header("last-event-id", tail_token(0, None, &["alpha"], json!({})))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = budget_router(exact_bytes - 1)
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let response = budget_router(exact_bytes).oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body();
+    let frame = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert_eq!(frame.len(), exact_bytes);
+    drop(stream);
+
+    let checkpoint_bytes = token.len() + 36;
+    let checkpoint_request = || {
+        Request::builder()
+            .uri("/logs/tail")
+            .header("authorization", "Bearer reader-token-123456")
+            .header("last-event-id", &token)
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        budget_router(checkpoint_bytes - 1)
+            .oneshot(checkpoint_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    let response = budget_router(checkpoint_bytes)
+        .oneshot(checkpoint_request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = response.into_body();
+    let checkpoint = stream.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert_eq!(checkpoint.len(), checkpoint_bytes);
+
+    // Once SSE has started, a newly committed event exceeding the budget is a bounded gap.
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/logs/ingest",
+            "producer-token-123456",
+            "application/json",
+            json!([{"time":200,"level":30,"msg":"x".repeat(2048)}]).to_string()
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), stream.frame())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_data()
+        .unwrap();
+    assert!(frame.len() <= checkpoint_bytes);
+    assert!(
+        String::from_utf8(frame.to_vec())
+            .unwrap()
+            .contains("event: gap")
+    );
+    assert!(stream.frame().await.is_none());
+
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn real_http_attribute_encoding_and_tail_resume_smoke() {
+    let (_directory, storage, app) = setup();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+    });
+
+    let client = reqwest::Client::new();
+    let filter = r#"{"attributes":[{"key":"runId","op":"eq","value":"run +/☃&source=beta"}]}"#;
+    let mut url = reqwest::Url::parse(&format!("{origin}/indexes/default/logs/tail")).unwrap();
+    url.query_pairs_mut().append_pair("filter", filter);
+    let mut tail = client
+        .get(url.clone())
+        .bearer_auth("reader-token-123456")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(tail.status(), 200);
+    let checkpoint = tail.chunk().await.unwrap().unwrap();
+    let checkpoint = String::from_utf8(checkpoint.to_vec()).unwrap();
+    assert!(checkpoint.contains("event: cursor"));
+    let token = frame_id(&checkpoint).to_owned();
+    drop(tail);
+
+    let response = client
+        .post(format!("{origin}/indexes/default/logs/ingest"))
+        .bearer_auth("producer-token-123456")
+        .header("content-type", "application/json")
+        .body(
+            json!([
+                {"time":100,"level":30,"msg":"over HTTP","runId":"run +/☃&source=beta"},
+                {"time":200,"level":30,"msg":"hidden","runId":"other"}
+            ])
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let mut resumed = client
+        .get(url)
+        .bearer_auth("reader-token-123456")
+        .header("last-event-id", token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resumed.status(), 200);
+
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), resumed.chunk())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame = String::from_utf8(frame.to_vec()).unwrap();
+    assert!(frame.contains("over HTTP"), "{frame}");
+    assert!(!frame.contains("hidden"), "{frame}");
+    drop(resumed);
+
+    let mut url = reqwest::Url::parse(&format!("{origin}/indexes/default/logs/count")).unwrap();
+    url.query_pairs_mut()
+        .extend_pairs([("from", "0"), ("to", "1000"), ("filter", filter)]);
+    let response = client
+        .get(url)
+        .bearer_auth("reader-token-123456")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let result: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+    assert_eq!(result["count"], 1);
+
+    stop.send(()).unwrap();
+    server.await.unwrap();
+
+    storage.shutdown().await.unwrap();
+}
+
+async fn metrics_text(app: &Router) -> String {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .header("authorization", "Bearer admin-token-1234567")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    String::from_utf8(
+        to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+fn assert_metrics_declared_once_before_samples(text: &str) {
+    use std::collections::BTreeSet;
+
+    let mut help = BTreeSet::new();
+    let mut kinds = BTreeSet::new();
+    let mut series = BTreeSet::new();
+    for line in text.lines() {
+        if let Some(declaration) = line.strip_prefix("# HELP ") {
+            let family = declaration.split_once(' ').unwrap().0;
+            assert!(help.insert(family), "duplicate HELP for {family}");
+        } else if let Some(declaration) = line.strip_prefix("# TYPE ") {
+            let family = declaration.split_once(' ').unwrap().0;
+            assert!(kinds.insert(family), "duplicate TYPE for {family}");
+        } else if !line.starts_with('#') && !line.is_empty() {
+            let sample = line.split_once(' ').unwrap().0;
+            let metric = sample.split('{').next().unwrap();
+            let family = ["_bucket", "_sum", "_count"]
+                .iter()
+                .find_map(|suffix| {
+                    metric
+                        .strip_suffix(suffix)
+                        .filter(|family| kinds.contains(family))
+                })
+                .unwrap_or(metric);
+            if !family.starts_with("logbrook_forward_") {
+                assert!(help.contains(family), "sample precedes HELP: {line}");
+            }
+
+            assert!(kinds.contains(family), "sample precedes TYPE: {line}");
+            assert!(series.insert(sample), "duplicate series: {sample}");
+        }
+    }
+
+    assert!(!series.is_empty());
+    assert!(help.is_subset(&kinds));
+}
+
+#[tokio::test]
+async fn metrics_scrape_declares_each_family_once_before_samples() {
+    let (_directory, storage, app) = setup();
+    let text = metrics_text(&app).await;
+    assert!(text.contains("# TYPE logbrook_forward_"));
+    assert_metrics_declared_once_before_samples(&text);
+
+    storage.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn indexed_metrics_declare_storage_before_alphabetically_first_index() {
+    use logbrook::{http::router_with_registry, indexes::IndexRegistry};
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.storage.data_dir = directory.path().into();
+    config
+        .ingest_tokens
+        .insert("producer-token-123456".into(), "alpha".into());
+    config
+        .read_tokens
+        .insert("admin-token-1234567".into(), vec![]);
+
+    let registry = IndexRegistry::open(config.clone()).await.unwrap();
+    registry.ensure("aaa").await.unwrap();
+
+    let app = router_with_registry(registry.clone(), config);
+    let text = metrics_text(&app).await;
+    assert!(text.contains("index=\"aaa\""));
+    assert!(text.contains("index=\"default\""));
+
+    for index in ["aaa", "default"] {
+        for role in ["reader", "maintenance"] {
+            let labels = format!("{{index=\"{index}\",role=\"{role}\",worker=\"0\"}}");
+            assert!(text.contains(&format!(
+                "logbrook_storage_query_progress_available{labels} 0\n"
+            )));
+            assert!(text.contains(&format!(
+                "logbrook_storage_query_progress_fraction{labels} NaN\n"
+            )));
+        }
+    }
+
+    assert_metrics_declared_once_before_samples(&text);
+
+    registry.shutdown().await.unwrap();
+}
+
+#[test]
+fn openapi_tail_resume_schemas_describe_versioned_tokens() {
+    let spec: Value = serde_json::from_str(include_str!("../src/openapi.json")).unwrap();
+    for (path, index, expected) in [
+        ("/logs/tail", None, r"^v1\.[A-Za-z0-9_-]+$"),
+        (
+            "/indexes/{index}/logs/tail",
+            Some("orders"),
+            r"^[a-z0-9][a-z0-9_-]*:v1\.[A-Za-z0-9_-]+$",
+        ),
+    ] {
+        let parameter = spec["paths"][path]["get"]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|parameter| parameter["name"] == "Last-Event-ID")
+            .unwrap();
+        assert_eq!(parameter["schema"]["pattern"], expected);
+        assert_eq!(parameter["schema"]["maxLength"], 1024);
+        assert!(
+            !parameter["description"]
+                .as_str()
+                .unwrap()
+                .contains("search")
+        );
+
+        let token = tail_token(1, index, &[], json!({}));
+        let unscoped = index.map_or(token.as_str(), |index| {
+            token.strip_prefix(&format!("{index}:")).unwrap()
+        });
+        let payload = unscoped.strip_prefix("v1.").unwrap();
+        assert!(!payload.is_empty());
+        assert!(
+            payload
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        );
+        assert!(token.len() <= parameter["schema"]["maxLength"].as_u64().unwrap() as usize);
+    }
 }

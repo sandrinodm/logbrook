@@ -126,6 +126,13 @@ tail_poll_ms = 1000
 # explicitly described below. Only data_dir and max_size_bytes have env overrides.
 [storage]
 
+# Optional top-level string attributes to store in typed columns, up to eight
+# distinct keys of 1..256 UTF-8 bytes. TOML only; no env override. Empty is off
+# for a new index. Activation records an immutable key set and upgrades that
+# index to schema 4; later omission/[] retains its durable layout. Changing the
+# set requires a new index and reimport. Take an offline backup before activation.
+# promoted_string_keys = ["runId", "actorJobId", "videoId"]
+
 # Root storage directory; index data lives under <data_dir>/indexes/<name>.
 # Relative paths resolve from the server's working directory. Paths must be UTF-8
 # without *, ?, [, or ] characters. Env: LOGBROOK_DATA_DIR.
@@ -221,6 +228,9 @@ maintenance_timeout_ms = 30000
 # their policies. Empty entries are ignored; whitespace is not trimmed. There are
 # no per-index env policy overrides. Omitted fields inherit resolved global policy.
 [indexes.payments]
+# Optional override of storage.promoted_string_keys. [] prevents activation on
+# an unactivated index; it does not disable a previously activated layout.
+# promoted_string_keys = ["runId", "actorJobId"]
 # Payments retention in days; overrides global retention, including env settings.
 # TOML only; no env override. Use this or retention_ms, never both in one index.
 retention_days = 30
@@ -262,3 +272,33 @@ max_size_gb = 5
 # [read_index_scopes]
 # Example: allow the matching reader credential to read payments and audit.
 # "replace-with-random-reader-token" = ["payments", "audit"]
+
+# Optional Fluent Forward input. TOML only; disabled by default. HTTP credentials
+# remain required. See docs/FORWARD.md for limits, secure listeners, and semantics.
+[forward]
+enabled = false
+
+# Uncomment the listener, principal, and route together to enable the Docker
+# example, and set forward.enabled=true. "payments" is predeclared above.
+# [[forward.listeners]]
+# name = "docker-local"
+# bind = "127.0.0.1:24224"
+# security = "trusted_local"
+# principal = "docker-host"
+# keepalive = true
+#
+# [forward.principals.docker-host]
+# source = "docker-host"
+# indexes = ["payments"]
+#
+# [[forward.routes]]
+# listener = "docker-local"
+# tag_prefix = "payments."
+# index = "payments"
+# normalizer = "docker"
+# json_profile = "json_auto"
+# service_from = "tag_suffix"
+# host = "application-host"
+# compose_service_label = "com.docker.compose.service"
+# application_time_field = "time"
+# application_time_format = "unix_ms"
