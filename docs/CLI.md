@@ -1,6 +1,6 @@
 # Logbrook CLI
 
-The `logbrook` executable includes the server, offline maintenance commands, and an HTTP client for the running server. Remote commands never open the local data directory or load server configuration. `--config` belongs to server/offline commands; remote commands reject it. This makes the client usable from another machine without access to database files.
+The `logbrook` executable contains the server, offline maintenance commands, and an HTTP client for a running server. The client commands (`indexes`, `query` and `count`) talk to the server over HTTP and never open the data directory or read server configuration, so you can run them from another machine. They reject `--config`, which only applies to server and offline commands.
 
 ## Connect and authenticate
 
@@ -11,11 +11,11 @@ export LOGBROOK_ADMIN_TOKEN='<your separate management credential>'
 logbrook indexes list
 ```
 
-The URL defaults to `http://127.0.0.1:3100`. Both HTTP and HTTPS are supported; HTTPS validates the certificate and hostname. A base URL path is supported for a reverse proxy mounted below a prefix. Redirects are rejected, so a redirected request cannot forward credentials to a different endpoint. The client rejects URL credentials, query strings, and fragments.
+The server URL comes from `--url`, then `LOGBROOK_URL`, and defaults to `http://127.0.0.1:3100`. HTTPS URLs are checked against the certificate and hostname. The URL can include a path, for a server mounted below a prefix behind a reverse proxy, but not credentials, a query string or a fragment. The client does not follow redirects, so a redirect cannot send your token to another host.
 
-Configure the admin credential on the server using `LOGBROOK_ADMIN_TOKEN` or top-level TOML `admin_tokens = ["<random credential>"]`, then restart. Compose forwards the optional environment variable when present. Admin credentials must differ from read and ingestion credentials; existing read/ingestion tokens acquire no deletion authority. Without an admin token, deletion is unavailable.
+To enable index deletion, configure an admin token on the server with `LOGBROOK_ADMIN_TOKEN` or the top-level TOML setting `admin_tokens = ["<random credential>"]`, then restart. Compose passes `LOGBROOK_ADMIN_TOKEN` through when it is set. The admin token must differ from every read and ingestion token, and read and ingestion tokens can never delete. Without an admin token, nothing can delete an index.
 
-`--token` overrides `LOGBROOK_TOKEN`, which overrides the role-specific variables below. Prefer environment variables so credentials do not appear in shell history or process arguments. The CLI never writes credentials to disk.
+`--token` takes precedence over `LOGBROOK_TOKEN`, which takes precedence over the role-specific variables below. Prefer the environment variables, which keep tokens out of shell history and process listings. The CLI never writes credentials to disk.
 
 | Command | Role-specific credential selection |
 | --- | --- |
@@ -24,7 +24,7 @@ Configure the admin credential on the server using `LOGBROOK_ADMIN_TOKEN` or top
 | `indexes delete` | `LOGBROOK_ADMIN_TOKEN` |
 | `query`, `count` | `LOGBROOK_READ_TOKEN` |
 
-Admin credentials authorize index management only. They cannot read log events, ingest events, or access global metrics. Read and ingestion credentials retain their configured index/source scopes.
+An admin token manages indexes and nothing else: it cannot read or ingest events or scrape metrics. Read and ingestion tokens keep their configured index and source restrictions.
 
 ## Indexes and sizes
 
@@ -35,13 +35,13 @@ logbrook indexes show checkout
 logbrook indexes show checkout --json
 ```
 
-Create is idempotent and uses the server's effective policy. It respects `max_indexes` and does not change retention configuration. List/show display measured size, configured size target, retention, and readiness. JSON includes exact `size_bytes`, `database_bytes`, `wal_bytes`, `archive_bytes`, `temp_bytes`, and `other_bytes`, plus `max_size_bytes` (null when unlimited), `retention_ms`, and `ready`.
+`create` is idempotent. The new index gets the server's configured policy, counts toward `max_indexes`, and cannot change retention. `list` and `show` print each index's size, size limit, retention and readiness; `show` adds a size breakdown. With `--json` you get the exact `size_bytes`, `database_bytes`, `wal_bytes`, `archive_bytes`, `temp_bytes` and `other_bytes`, plus `max_size_bytes` (null when there is no limit), `retention_ms` and `ready`.
 
-Sizes are fresh sums of physical file lengths, including unpublished/unknown files; they are not event JSON sizes or filesystem allocated blocks. Measurements can change during concurrent ingestion and maintenance. Readers limited to particular sources receive index names only, so sizes cannot reveal other sources' data volume. Human output displays unavailable fields as `-`.
+Sizes are the summed lengths of the index's files, measured on each request, so they change while the index is written. They are not the size of the event JSON or the disk blocks allocated. A read token restricted to particular sources sees index names only, so it cannot learn how much data other sources store. The table shows a missing value as `-`.
 
 ## Search, count, and pagination
 
-For a runnable demo, expected results, and detailed CLI/HTTP recipes, see the [query cookbook](QUERY-EXAMPLES.md).
+The [query cookbook](QUERY-EXAMPLES.md) has a runnable demo with expected results and more CLI and HTTP recipes.
 
 ```sh
 logbrook query checkout --since 30m --service api --min-level 40 --limit 50
@@ -49,18 +49,26 @@ logbrook query checkout --since 1d --message 'request failed' --json
 logbrook count checkout --since 7d --source production
 ```
 
-Query/count default to the last hour. `--since` accepts a positive integer followed by `ms`, `s`, `m`, `h`, `d`, or `w`. Alternatively, supply both `--from` and `--to` as Unix milliseconds; the range is inclusive at the start and exclusive at the end. Server retention and maximum-range policies still apply.
+`query` and `count` cover the last hour by default. `--since` takes a positive integer with an `ms`, `s`, `m`, `h`, `d` or `w` suffix. Instead of `--since`, you can pass both `--from` and `--to` as Unix milliseconds; `from` is inclusive and `to` is exclusive. The server's retention and maximum range still apply.
 
-Filters: `--source` (comma-separated), `--service`, `--logger`, `--host`, `--message` (case-sensitive substring), and `--min-level` (numeric severity). Search additionally accepts `--limit` and `--cursor`; count returns the number of matching retained events. These commands use structured HTTP filters, not arbitrary SQL.
+| Filter | Matches |
+| --- | --- |
+| `--source` | One source or a comma-separated list |
+| `--service`, `--logger`, `--host` | Exact value |
+| `--message` | Case-sensitive substring |
+| `--min-level` | `level` greater than or equal to this number |
+| `--filter '<JSON>'` | Top-level attribute equality; see [attribute equality](API.md#attribute-equality) |
 
-Query displays a table with the effective time range and any next-page cursor. With `--json`, it returns the server object containing `events` and `next_cursor`, including complete event attributes. It fetches one page and does not silently scan every result. For pagination, use the same explicit bounds and filters on every request:
+`query` also takes `--limit` (1 to 1,000, default 100) and `--cursor`. `count` prints the number of matching events. The CLI checks the `--filter` JSON before sending the request.
+
+`query` prints a table with the time range searched, one row per event and, when there is another page, its cursor. With `--json` it prints the server response, `events` and `next_cursor`, with every event attribute. It fetches one page per run. To page through results, repeat the same explicit bounds and filters and add the cursor:
 
 ```sh
 logbrook query checkout --from 1791334800000 --to 1791338400000 --limit 100 --json
 logbrook query checkout --from 1791334800000 --to 1791338400000 --limit 100 --cursor '<next_cursor>' --json
 ```
 
-`--cursor` requires explicit `--from` and `--to`; recalculating a relative range would change the search. Named-route cursors belong to their index and may expire when retention removes data. Reusing the same bounds and filters is the client's responsibility; the cursor does not encode the full filter set.
+`--cursor` requires `--from` and `--to`, because a relative `--since` window would move between runs. The cursor only works with the same index, bounds, filters, sources and `--limit`; changing any of them returns `400`. It can also expire when retention removes data.
 
 ## Delete an index
 
@@ -68,21 +76,31 @@ logbrook query checkout --from 1791334800000 --to 1791338400000 --limit 100 --cu
 logbrook indexes delete checkout --yes
 ```
 
-This permanently removes the index's events, database, WAL, archives, and temporary files. The command requires `--yes` before it sends a request, as well as server-side admin authentication. The mandatory `default` index cannot be deleted. An index declared in TOML or `LOGBROOK_INDEXES` is protected: first remove that declaration and restart, then delete the discovered index.
+This permanently removes the index's events, database, WAL, archives and temporary files. Without `--yes` the command stops before sending anything, and the server also requires an admin token. The mandatory `default` index cannot be deleted. An index declared in TOML or `LOGBROOK_INDEXES` is protected: remove the declaration and restart, then delete it.
 
-Deletion stops admission for the selected index, drains its native workers, and moves its directory into the reserved `<data_dir>/.index-trash/` area before cleanup. An admitted deletion continues if the client disconnects. Other indexes remain usable. Startup retries cleanup of recognized deletion remnants; keep unrelated files out of this reserved directory.
+Other indexes stay available during a deletion, and once the server has accepted one it finishes even if the client disconnects. The server moves the index into `<data_dir>/.index-trash/` before removing it and finishes interrupted cleanups at startup, so keep other files out of that directory.
 
-Stop producers before permanent removal: later authorized ingestion may recreate the same name with a fresh empty index. A deleted name also becomes available for explicit creation. If a request times out or returns a filesystem error, inspect the index state before retrying; the operation may already have removed the index while cleanup remains pending.
+Stop producers first: a later ingestion with an authorized token recreates the name as a new, empty index. If the request times out or returns a filesystem error, check whether the index still exists before retrying, since the server may already have removed it and still be cleaning up.
+
+## Offline projection status
+
+With the server stopped, run this against its configuration to see how much of an index is covered by promoted string attributes:
+
+```sh
+logbrook --config logbrook.local.toml --index payments projection-status
+```
+
+It prints JSON with `schema_version`, `promoted_string_keys`, `hot_rows`, `hot_covered_rows`, `archived_rows`, `archived_covered_rows` and `legacy_archive_files`. The command opens the index directly instead of calling the HTTP API, with the same startup validation as the server, so a configured key set activates on an index that has none yet. See [promoted string attributes](OPERATIONS.md#promoted-string-attributes) for activation, backups and downgrades.
 
 ## Output and deadlines
 
-List/show/query use a human-readable table by default; count prints a number. `--json` emits the complete server response as JSON for every remote command. Command results use stdout and errors use stderr with nonzero exit status. A closed output pipe is handled gracefully.
+`indexes list`, `indexes show` and `query` print a table by default, and `count` prints a number. `--json` prints the full server response for every client command. Results go to stdout; errors go to stderr with a nonzero exit status. Closing the output pipe early (for example with `head`) is not an error.
 
-The default remote deadline is 30 seconds. Set `--timeout 60` for a slower server (supported range 1–300 seconds). Responses are capped at 16 MiB, including streamed/chunked bodies. Reduce the page size if a query exceeds this client limit. Requests are not automatically retried.
+Requests time out after 30 seconds by default; set `--timeout 60` for a slower server (1 to 300 seconds). The client refuses responses over 16 MiB, so lower `--limit` if a page is larger. Failed requests are not retried.
 
 ## Containers
 
-The production image contains the same executable. Run management commands against the running Compose service without opening its database directly:
+The production image contains the same executable. Run client commands inside the running Compose service; they reach the server over loopback and do not open its database:
 
 ```sh
 docker compose exec logbrook logbrook indexes list
@@ -90,4 +108,4 @@ docker compose exec logbrook logbrook query checkout --since 1h
 docker compose exec logbrook logbrook indexes delete checkout --yes
 ```
 
-These commands inherit the container's configured role credentials. They use HTTP through loopback; no shell or extra runtime tools are required. Existing `serve`, `check-config`, `healthcheck`, `import`, and `archive` commands retain their server/offline behavior.
+These commands use the tokens set in the container's environment and need no shell or other tools in the image. The `serve`, `check-config`, `healthcheck`, `import`, `archive` and `projection-status` commands are server and offline commands; see [operations](OPERATIONS.md).

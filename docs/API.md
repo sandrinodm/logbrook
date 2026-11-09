@@ -1,16 +1,16 @@
 # HTTP API
 
-Logbrook accepts structured log batches and queries one named index per request. Search and aggregates include retained hot events and Parquet archives automatically. The machine-readable [OpenAPI contract](../src/openapi.json) is served at `GET /openapi.json`; the [query cookbook](QUERY-EXAMPLES.md) covers longer investigations and exports. See [operations](OPERATIONS.md) for server configuration and storage policies.
+Logbrook accepts structured log batches and queries one named index per request. Search and aggregate results include archived events as well as recent ones. The [OpenAPI contract](../src/openapi.json) is served at `GET /openapi.json`, the [query cookbook](QUERY-EXAMPLES.md) has longer investigations and exports, and [operations](OPERATIONS.md) covers server configuration and storage policies.
 
 ## Routes and credentials
 
-Send credentials as `Authorization: Bearer <token>`. Credential roles are separate: administration does not grant event read or ingestion access. Missing, malformed, unknown, or inappropriate-role tokens return `401`; a recognized token denied by a scope returns `403`.
+Send credentials as `Authorization: Bearer <token>`. Each credential has one role, and the roles do not overlap: an admin token cannot read or ingest events. A missing, malformed or unknown token, or one with the wrong role, returns `401`. A valid token that its scope denies returns `403`.
 
-Configure tokens with 16 to 512 visible ASCII characters and no whitespace. The server rejects non-ASCII and control characters during configuration validation.
+Tokens are 16 to 512 visible ASCII characters with no whitespace. The server refuses to start with any other token.
 
 | Method and path | Credential | Result on success |
 | --- | --- | --- |
-| `POST /indexes/{index}/logs/ingest` | Ingestion | `200`, `{"accepted":N}` after durable commit |
+| `POST /indexes/{index}/logs/ingest` | Ingestion | `200`, `{"accepted":N}` after the batch is committed |
 | `GET /indexes/{index}/logs` | Read | `200`, `{"events":[...],"next_cursor":...}` |
 | `GET /indexes/{index}/logs/count` | Read | `200`, `{"count":N}` |
 | `GET /indexes/{index}/logs/facets` | Read | `200`, five arrays of value/count pairs |
@@ -25,19 +25,19 @@ Configure tokens with 16 to 512 visible ASCII characters and no whitespace. The 
 | `GET /ready` | None | `200`, `{"status":"ready"}`, or `503` |
 | `GET /openapi.json` | None | `200`, OpenAPI JSON |
 
-The unprefixed `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram`, and `/logs/tail` routes address `default` and enforce the same credential scopes. Prefer named routes for new clients. Named-route cursors include their index prefix; they are not interchangeable with unprefixed-route cursors, even for `default`.
+The unprefixed `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram` and `/logs/tail` routes address the `default` index with the same credential rules. Use the named routes in new clients. Cursors from the two route styles are not interchangeable, even for `default`.
 
-An ingestion token maps to one canonical **source**. A read token has an allowed source list: an empty list grants all sources. Optional ingestion/read index scopes restrict each token to exact index names; a missing or empty index scope grants all indexes. A read must satisfy both source and index restrictions. Omitting the `source` filter searches all sources permitted by the read token; explicitly requesting any disallowed source returns `403`. Admin credentials can inspect and manage all indexes. Metrics require a read token unrestricted by both source and index.
+An ingestion token writes to one **source**, which is stamped on every event it sends. A read token has a list of allowed sources, and an empty list allows all of them. Ingestion and read tokens can also be limited to a list of exact index names; without that list they reach every index. A read must pass both the source and the index restriction. A query without a `source` filter searches every source the token allows, and naming a source outside it returns `403`. Admin tokens can inspect and manage every index. `/metrics` requires a read token with no source or index restriction.
 
 ## Index lifecycle
 
-An index name contains 1 to 63 lowercase ASCII letters, digits, `-`, or `_`, starting with a letter or digit. Names and scopes have no wildcard syntax. Each index has independent storage and retention policies.
+An index name has 1 to 63 lowercase ASCII letters, digits, `-` or `_`, and starts with a letter or digit. Names and scopes have no wildcards. Each index has its own storage and retention policy.
 
-`PUT /indexes/{index}` is idempotent. Authorized ingestion also creates a missing index automatically; the index can be created before body validation, so a rejected batch can leave an empty index. Reads never create indexes and return `404` for an unknown index. The default maximum is four indexes, including the mandatory `default`; creation at capacity returns `429`.
+`PUT /indexes/{index}` is idempotent. Ingesting into a missing index also creates it, before the body is validated, so a rejected batch can leave an empty index behind. Reads never create indexes and return `404` for an unknown one. By default the server allows four indexes, including the mandatory `default`; creating one more returns `429`.
 
-Index creation inherits server defaults and any configured per-index policy. The PUT request does not set a retention or size policy. Change those policies through server configuration and restart.
+A new index takes the server defaults and any per-index policy in the server configuration. `PUT` reads no request body and cannot set retention or a size limit; change those in the configuration and restart.
 
-`GET /indexes` lists only indexes allowed by the credential. Admin tokens and readers with unrestricted source access receive fresh physical file measurements, policy, and readiness:
+`GET /indexes` lists only the indexes the credential can reach. Admin tokens and read tokens with no source restriction get file sizes, policy and readiness for each index:
 
 ```json
 {
@@ -54,13 +54,13 @@ Index creation inherits server defaults and any configured per-index policy. The
 }
 ```
 
-Measurements are illustrative, can change during concurrent activity, and count logical file lengths rather than allocated filesystem blocks. Source-scoped readers receive only `{"name":"checkout"}` to avoid exposing other sources' storage usage. `max_size_bytes: null` means size retention is disabled.
+Sizes are measured on each request as the sum of file lengths, not allocated disk blocks, and change while the index is being written. `max_size_bytes: null` means the index has no size limit. A read token restricted to particular sources gets only `{"name":"checkout"}`, so it cannot learn how much data other sources store.
 
-Deletion permanently removes a dynamic index and requires a separate admin credential. `default` and indexes declared in server configuration are protected (`400`). Remove a configured index from configuration and restart before deleting it. Stop producers first: later ingestion can recreate a deleted index. Deletion drains the selected index and cleans up independently of the client's connection; failed cleanup can be retried on startup or a later deletion.
+`DELETE` permanently removes an index and needs an admin token. `default` and indexes declared in the server configuration cannot be deleted (`400`); remove a configured index from the configuration and restart first. Stop producers before deleting, because a later ingestion recreates the index. Once the server has accepted a deletion it finishes even if the client disconnects, and it retries interrupted cleanup at startup.
 
 ## Ingest a batch
 
-These examples use Bash or Zsh, `curl`, `jq`, and an already running server. Replace the credential placeholders with configured tokens; ensure both tokens allow the chosen index and that the reader allows the producer's source. Each ingestion appends new events, so repeating it creates duplicates.
+These examples use Bash or Zsh, `curl`, `jq` and a running server. Replace the token placeholders with configured tokens. Both tokens must allow the chosen index, and the read token must allow the ingestion token's source. Every ingestion appends new events, so running it twice stores duplicates.
 
 ```sh
 export LOGBROOK_URL=http://127.0.0.1:3100
@@ -86,9 +86,9 @@ jq -n --argjson until "$API_TO_MS" '
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-Expected response: `{"accepted":2}`. Times are captured at runtime to fit the default live retention window. This example needs a free index slot and a retention policy accepting these recent timestamps.
+Expected response: `{"accepted":2}`. The event times are taken from the current clock so they fall inside the default retention window. The example needs a free index slot.
 
-The request body must be a nonempty JSON **array** of objects, including for a single event. For NDJSON, use `Content-Type: application/x-ndjson` (or `application/ndjson`) and one event object per line, without an enclosing array. Blank lines are ignored. Missing Content-Type defaults to JSON; other media types return `400`. Media-type parameters such as `; charset=utf-8` are accepted.
+The body is a nonempty JSON **array** of objects, even for a single event. For NDJSON, send `Content-Type: application/x-ndjson` (or `application/ndjson`) with one event object per line and no enclosing array; blank lines are ignored. A request without `Content-Type` is read as JSON, and any other media type returns `400`. Parameters such as `; charset=utf-8` are accepted.
 
 | Input field | Requirement | Canonical response field |
 | --- | --- | --- |
@@ -101,15 +101,15 @@ The request body must be a nonempty JSON **array** of objects, including for a s
 | `pid` | Optional nonnegative signed 64-bit integer or null | `pid` |
 | All other keys | JSON values within configured limits | Nested under `attributes` |
 
-Optional missing fields become null in canonical event objects. Unknown keys are preserved, including nested objects and arrays. A producer's `id`, `source`, `event_time`, `received_at`, `message`, `host`, or `logger` keys become attributes and cannot override canonical fields. An input `attributes` object stays nested at `attributes.attributes`; it is not merged into the canonical attributes map. The server assigns the event `id` as a JSON string, `received_at` as Unix milliseconds, and `source` from the ingestion credential.
+Optional fields that are missing come back as null. Other keys are kept as sent, including nested objects and arrays. A producer's own `id`, `source`, `event_time`, `received_at`, `message`, `host` or `logger` key becomes an attribute and does not override the canonical field. An input `attributes` object stays nested at `attributes.attributes`. The server sets `id` (a JSON string), `received_at` (Unix milliseconds) and `source` (from the ingestion token).
 
-Validation and storage commit are atomic for the event batch. One invalid, oversized, or expired event rejects the whole batch. Live ingestion accepts event times from `now - retention_ms` through `now + max_future_skew_ms` (default five minutes ahead), then rechecks the persisted retention cutoff at commit. Enlarging retention cannot admit timestamps already expired by that cutoff. Historical offline imports are a separate CLI operation.
+A batch is accepted or rejected as a whole: one invalid, oversized or expired event rejects all of it. Event times must fall between `now - retention_ms` and `now + max_future_skew_ms` (five minutes by default). Raising retention later does not let you ingest events older than data the server has already expired. To load older history, use the offline `logbrook import` command described in [operations](OPERATIONS.md).
 
-Success acknowledges appender flush and transaction commit. There are no producer idempotency keys. A timeout or connection loss can leave an uncertain outcome; retrying may duplicate events.
+A `200` means the batch is committed. There are no idempotency keys, so after a timeout or dropped connection you cannot tell whether the batch was stored, and retrying it can store duplicates.
 
 ## Search and filter
 
-Every bounded search or aggregate requires integer Unix millisecond `from` and `to` parameters with `0 <= from < to <= 253402300799999`. The interval is half-open: `from` is inclusive and `to` is exclusive. The maximum default span is 31 days. HTTP has no `since` parameter.
+Search, count, facets and histogram require integer Unix millisecond `from` and `to` parameters with `0 <= from < to <= 253402300799999`. The interval is half-open: `from` is inclusive and `to` is exclusive. The span can be at most 31 days by default. HTTP has no `since` parameter.
 
 | Parameter | Meaning | Accepted by |
 | --- | --- | --- |
@@ -117,14 +117,17 @@ Every bounded search or aggregate requires integer Unix millisecond `from` and `
 | `service`, `logger`, `host` | Exact, case-sensitive string | Search, count, facets, histogram, tail |
 | `message` | Literal, case-sensitive substring | Search, count, facets, histogram, tail |
 | `min_level` | Nonnegative integer; matches `level >= min_level` | Search, count, facets, histogram, tail |
+| `filter` | URL-encoded JSON with top-level attribute equality conditions | Search, count, facets, histogram, tail |
 | `from`, `to` | Required event-time bounds | Search, count, facets, histogram |
 | `limit` | Search page size; default 100 (or configured maximum if lower), maximum 1,000 by default | Search only |
 | `cursor` | Opaque continuation from `next_cursor` | Search only |
 | `interval_ms` | Positive histogram bucket duration | Histogram only |
 
-Filters combine with AND; only the source list has OR semantics. At most 128 sources can be requested. Text fields and search cursors must fit the configured field byte limit. `%`, `_`, `*`, and regex punctuation are literal message characters. Arbitrary attribute predicates, exact/maximum severity, regex, query languages, and cross-index queries are not exposed. Export and filter client-side when needed. Unknown or endpoint-inappropriate parameters return `400`.
+Different filters combine with AND; only the `source` list means OR. A request can name at most 128 sources. Text filters must fit the configured field byte limit, and a cursor is at most 1,024 bytes including its index prefix. On the log GET routes, the path plus query string is limited to 32,768 bytes. In `message`, characters such as `%`, `_`, `*` and regex punctuation match literally.
 
-Use URL encoding for all parameters. The fixed bounds captured above make this request include both demo events:
+There are no nested attribute paths, attribute ranges, grouping by attribute, exact or maximum severity filters, regular expressions, query language or cross-index queries. For those, export the events and filter them client-side. Unknown parameters, and parameters the endpoint does not accept, return `400`.
+
+URL-encode every parameter. With the bounds captured above, this request matches both demo events and returns the newest:
 
 ```sh
 curl --fail-with-body --silent --show-error --get \
@@ -134,7 +137,7 @@ curl --fail-with-body --silent --show-error --get \
   --data-urlencode 'service=checkout' --data-urlencode 'limit=1'
 ```
 
-A canonical event has this shape (IDs, source, and timestamps below are illustrative):
+The response looks like this (the IDs, source and timestamps will differ):
 
 ```json
 {
@@ -149,13 +152,51 @@ A canonical event has this shape (IDs, source, and timestamps below are illustra
 }
 ```
 
-Results sort by descending `event_time`, then descending `id` for ties. There is no configurable sort. Empty results return `{"events":[],"next_cursor":null}`.
+Results are sorted by descending `event_time`, then descending `id` for ties, and the order cannot be changed. An empty result is `{"events":[],"next_cursor":null}`.
 
-To paginate, pass the exact returned `next_cursor` on the next request; stop when it is null. Reuse the same index, route style, bounds, filters, and limit. The cursor records a position and ingestion high-water mark; it does not encode all filters. Keeping the query unchanged is the client's responsibility. Events ingested after the first page are excluded, even if their event times are inside the window. Retention can still remove events or expire the continuation (`400`); pagination is not a permanent snapshot.
+To get the next page, send the returned `next_cursor` as `cursor` and stop when it is null. Keep the index, route style, `from`, `to`, filters, sources and `limit` the same: the cursor is tied to the query it came from, and a request that changes any of them returns `400`. Listing the same sources or attribute conditions in a different order is fine. Treat the cursor as opaque and never build one from an event `id`.
+
+A paginated search only returns events that were ingested before its first page, even if later events fall inside the time window. It is not a snapshot, though: retention can still remove events between pages, or expire the cursor itself (`400`). Cursors stay valid across server restarts. After an index is deleted and created again, start a new search instead of reusing an old cursor. A cursor grants no access: every page is checked against the token that sends it.
+
+## Attribute equality
+
+Pass one URL-encoded JSON object in `filter`:
+
+```json
+{"attributes":[{"key":"runId","op":"eq","value":"run-123"},{"key":"actorJobId","op":"eq","value":"actor-job-456"}]}
+```
+
+All conditions must match, and they apply before pagination and aggregation, so counts, facets and histograms cover only matching events. The same `filter` works on search, count, facets, histogram and tail, and combines with the other filters such as `min_level=50`.
+
+```sh
+curl --fail-with-body --silent --show-error --get \
+  "${LOGBROOK_URL%/}/indexes/$API_INDEX/logs/count" \
+  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
+  --data-urlencode "from=$API_FROM_MS" --data-urlencode "to=$API_TO_MS" \
+  --data-urlencode 'filter={"attributes":[{"key":"runId","op":"eq","value":"run-123"}]}'
+```
+
+A key names a property directly under the event's `attributes`. Dots, slashes, tildes, dollar signs and wildcard characters in a key are matched literally. Keys and string values are case-sensitive and are not Unicode-normalized. The only operator is `eq`, and the value must be a string, number or boolean; null, object and array values are rejected. An event whose property is missing, null, an array or an object never matches. Types must agree: `123` does not match `"123"`, and `true` matches neither `1` nor `"true"`.
+
+Numbers compare by value, so `123`, `123.0` and `1.23e2` are equal, and so are `0` and `-0.0`. Integers in the signed or unsigned 64-bit range compare exactly. Other numbers compare as 64-bit floats, the same precision ingestion stores. An integer filter value outside the 64-bit range, or a number that is not finite, is rejected.
+
+| Filter limit | Value |
+| --- | --- |
+| Filter document, after URL decoding | 4,096 bytes |
+| Conditions | 16 |
+| Key | 1 to 256 bytes, or the configured field limit if lower |
+| String value | 0 to 1,024 bytes, or the configured field limit if lower |
+| Numeric value | 128 characters |
+
+The encoded filter also counts toward the 32,768-byte request target limit, and a proxy in front of Logbrook may allow less.
+
+Omitting `filter` is the same as `{"attributes":[]}`. A condition repeated with the same value counts once (after the 16-condition check), and two different values for one key are rejected. Empty or malformed JSON, `{}`, unknown or repeated members, a repeated `filter` parameter and operators other than `eq` return `400`, for example `{"error":"filter.attributes[1].op: only eq is supported"}`.
+
+Only top-level attributes can be matched. A custom field sent at the top level of an ingested event, such as `runId`, becomes `attributes.runId` and can be filtered. An input `attributes` object stays at `attributes.attributes`, and events received over Fluent Forward keep their application fields under `attributes.application`. Equality filters cannot reach fields nested like that.
 
 ## Counts, facets, and histograms
 
-These endpoints compute over the entire matching retained window, independently of search pagination. Each request takes its own snapshot, so concurrent ingestion or retention may change totals between requests.
+These endpoints cover every matching event in the window, regardless of search page size. Each request reads the data at its own point in time, so totals from separate requests can differ while ingestion or retention runs.
 
 ```sh
 # Demo: {"count":1} for error and above.
@@ -166,15 +207,15 @@ curl --fail-with-body --silent --show-error --get \
   --data-urlencode 'min_level=50'
 ```
 
-`/logs/count` returns `{"count":0}` for no matches. `/logs/facets` returns `services`, `loggers`, `hosts`, `levels`, and `sources`. Each array contains up to 100 non-null values ranked by descending count, for example `{"value":"checkout","count":2}`. Level values are strings such as `"50"`. Missing optional fields do not contribute to that dimension. All filters apply before grouping, including a filter on the dimension being grouped.
+`/logs/count` returns `{"count":0}` when nothing matches. `/logs/facets` returns `services`, `loggers`, `hosts`, `levels` and `sources`. Each is an array of up to 100 non-null values sorted by descending count, such as `{"value":"checkout","count":2}`. Level values are strings, such as `"50"`. Events without an optional field are left out of that field's array. Filters apply before grouping, including a filter on the field being grouped.
 
-`/logs/histogram` returns `{"buckets":[{"time":...,"count":...}]}`. Bucket starts are Unix milliseconds, anchored to the exact requested `from`, and returned in ascending order. Only nonempty buckets appear; fill missing buckets with zeros in a chart. The last bucket may be shorter than the interval. An empty histogram returns `{"buckets":[]}`.
+`/logs/histogram` returns `{"buckets":[{"time":...,"count":...}]}`. Each `time` is a bucket start in Unix milliseconds, counted from the exact `from` you requested, and buckets come in ascending order. Empty buckets are left out, so fill them with zeros when charting. The last bucket can be shorter than the interval. An empty histogram is `{"buckets":[]}`.
 
-At most 2,000 possible buckets are allowed, including a partial final bucket: `ceil((to - from) / interval_ms) <= 2000`. Omitting `interval_ms` selects at least 60,000 ms and increases it to fit this limit. For the demo, request `/logs/histogram` with the same bounds and `interval_ms=10000`; bucket counts sum to two. Request `/logs/facets` with the same bounds to see the checkout service count of two.
+A request can cover at most 2,000 buckets, counting a partial last bucket: `ceil((to - from) / interval_ms) <= 2000`. Without `interval_ms`, the server uses 60,000 ms, or the smallest interval that fits 2,000 buckets if that is larger. For the demo, `/logs/histogram` with the same bounds and `interval_ms=10000` returns buckets that sum to two, and `/logs/facets` with the same bounds shows `checkout` with a count of two.
 
 ## Live tail and resume
 
-Tail follows committed **ingestion order**, so late-arriving events with older event times can appear after newer events. It accepts only the field filters in the table above, with no time bounds, page size, search cursor, or histogram interval. Without `Last-Event-ID`, it starts at the current committed position and follows new ingestion rather than replaying existing history.
+Tail follows events in the order they were ingested, so an event with an older `event_time` that arrives late appears after newer ones. It takes the filters from the table above but no time bounds, page size, cursor or histogram interval. Without `Last-Event-ID`, it starts at the newest committed event and only sends events ingested after that; it does not replay history.
 
 ```sh
 curl --fail-with-body --silent --show-error --no-buffer --get \
@@ -183,27 +224,27 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
   --data-urlencode 'service=checkout'
 ```
 
-The connection stays open until interrupted. Submit another event in a separate terminal to see a frame:
+The connection stays open until you interrupt it. Ingest another event from a second terminal to see frames like these:
 
 ```text
 event: log
-id: checkout:3
+id: checkout:v1.<opaque-resume-token>
 data: {"id":"3","source":"production",...}
 
 event: cursor
-id: checkout:3
+id: checkout:v1.<opaque-resume-token>
 data: caught up
 ```
 
-This illustrates framing only; actual IDs include your selected index name and `log` data contains a complete canonical event object. `cursor` frames indicate that the stream is caught up and advance its ingestion position even when filters exclude events. Keepalive comments may appear between frames.
+Real IDs start with your index name, and `log` data is a complete event object. A `cursor` frame means the stream has caught up; its ID is a resume point even when the filters matched nothing. Keepalive comments can appear between frames.
 
-Persist the last processed SSE ID from either `log` or `cursor`. Reconnect with `Last-Event-ID: <exact SSE id>` using the same index, route style, and filters to replay matching retained events after that position and then follow new ones. Treat the ID as opaque and preserve its named-index prefix. It differs from a search `next_cursor` and the event object's unprefixed JSON `id`.
+To resume, save the SSE ID of the last `log` or `cursor` frame you processed and reconnect with `Last-Event-ID: <that id>`, using the same index, route style and filters. The server replays matching events still retained after that point, then follows new ones. A resume ID with different filters returns `400` before the stream starts. Treat the ID as opaque, keep its index prefix, and don't confuse it with a search `next_cursor` or the event's own `id`.
 
-A `gap` frame signals retention expiry or a subscriber output byte limit and terminates the stream. Reconcile retained history with search before reconnecting; expired events cannot be recovered by repeating resume. An `error` frame also terminates the stream. Failures before streaming use ordinary HTTP error responses; failures after headers are sent use SSE frames. A large replay is drained in bounded pages; backlog size alone does not imply a gap. Clients must implement their own reconnect and ID persistence.
+Two frames end the stream. `gap` means the resume point has expired under retention, or the next event is larger than the per-subscriber output limit; `error` means the tail query failed. After a `gap`, search the retained history before reconnecting, because resuming again cannot recover expired events. If the very first event to replay is over the output limit, the request fails with `413` before streaming starts. Other failures before the stream starts are ordinary HTTP errors. A long replay does not cause a gap by itself. Clients reconnect and store IDs themselves; the server does neither.
 
 ## Limits and errors
 
-Limits are operator-configurable. Native defaults include:
+Operators can change every limit. The defaults are:
 
 | Limit | Default |
 | --- | --- |
@@ -218,11 +259,11 @@ Limits are operator-configurable. Native defaults include:
 | Tail subscribers / output bytes per subscriber | 8 / 1 MiB |
 | Index count, including default | 4 |
 
-Request, body-memory, connection, and tail budgets are shared across indexes. Response byte limits apply even when a requested page size is valid. Lower the page size or narrow filters if a response exceeds its budget.
+Request, body memory, connection and tail limits are shared by all indexes. A page can exceed the response byte limit even when `limit` is valid; lower the page size or narrow the filters.
 
-Retention is by event time and the committed expiry cutoff. Archives remain queryable until expiry. Optional size retention can expire oldest data before its age limit. Its per-index measured file footprint is a target, not an exact disk ceiling; database allocation and pinned reader files may delay physical reclamation. Ingestion returns `507` when the selected index remains at its target. Raising limits does not resurrect expired data. See [operations](OPERATIONS.md) for policy settings and physical disk behavior.
+Retention works on event time. Archived events stay searchable until they expire. An optional size limit per index expires the oldest data before its age limit. The size limit is a target rather than a hard disk ceiling, since freed space can take a while to return to the filesystem. Ingestion returns `507` while an index is at its size limit. Raising a limit does not bring back expired data. See [operations](OPERATIONS.md) for the policy settings.
 
-Application errors have the JSON shape `{"error":"explanation"}`. Do not parse the explanation as a stable error code.
+Errors are JSON objects of the form `{"error":"explanation"}`. The explanation is for people; don't parse it as an error code.
 
 | Status | Meaning / client action |
 | --- | --- |
@@ -236,10 +277,10 @@ Application errors have the JSON shape `{"error":"explanation"}`. Do not parse t
 | `504` | Body receive or query deadline exceeded; ingestion outcomes may be uncertain once admitted |
 | `507` | Selected index has reached its physical size target |
 
-Use bounded backoff for capacity failures and preserve the ingestion retry caveat above. Unsupported HTTP methods can return framework-level `405` responses.
+Retry `429` with bounded backoff, keeping in mind that a retried ingestion can duplicate events. A known route called with an unsupported method can return `405`.
 
 ## Health, readiness, and metrics
 
-`/health` is a public liveness response. `/ready` checks storage readiness across the registry and returns `503` with an error object if unavailable; it does not predict free disk space. `/openapi.json` is public and contains the served contract.
+`/health` is a public liveness check. `/ready` returns `503` with an error object when any index's storage is unavailable; it does not check free disk space. `/openapi.json` is public.
 
-`/metrics` requires an unrestricted read credential and exposes Prometheus text for HTTP requests and latency, ingest commitments/rejections, readiness, queues, memory admission budgets, tails/gaps, and storage. Storage series carry index labels; HTTP budgets remain global. `logbrook_ingested_events_total` counts durable commitments since process startup, including events later deleted or expired. It resets on restart and does not recount preexisting data. See [operations](OPERATIONS.md) for monitoring and configuration details.
+`/metrics` needs a read token with no source or index restriction. It serves Prometheus text covering HTTP requests and latency, ingested and rejected events, readiness, queues, memory budgets, tails and gaps, and storage. Storage series have an index label; HTTP budget series are global. `logbrook_ingested_events_total` counts events committed since the process started, including events later deleted or expired, and starts from zero on every restart. See [operations](OPERATIONS.md) for monitoring.

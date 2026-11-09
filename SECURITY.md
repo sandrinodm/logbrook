@@ -17,7 +17,7 @@ Do not test against installations you do not own or have permission to assess. U
 
 ## Release status
 
-Logbrook is pre-release software. Include an exact commit in reports about unreleased builds. Older development snapshots do not have a separate security maintenance policy.
+Logbrook is pre-release software. Include the exact commit in reports about unreleased builds. Fixes are not backported to older development snapshots.
 
 ## Deployment boundaries
 

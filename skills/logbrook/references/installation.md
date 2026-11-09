@@ -9,20 +9,20 @@ export LOGBROOK_IMAGE='ghcr.io/sandrinodm/logbrook:<version>'
 docker pull "$LOGBROOK_IMAGE"
 ```
 
-If that release is still running, wait for publication before diagnosing a missing image. Once publication completes, check the selected tag and package visibility if anonymous pulling fails. Authenticate only when the user intends to use a private package.
+If the release workflow is still running, wait for it to publish before diagnosing a missing image. If an anonymous pull fails after publication, check the tag and the package visibility. Authenticate only when the user intends to use a private package.
 
-For an optional source build, run this from a Logbrook checkout:
+To build the image from source instead, run this from a Logbrook checkout:
 
 ```sh
 export LOGBROOK_IMAGE=logbrook:local
 docker build --tag "$LOGBROOK_IMAGE" .
 ```
 
-Choose either Docker or Compose below for the instance. Both examples use host port 3100; running both unchanged would conflict.
+Use either Docker or Compose below, not both: both publish host port 3100.
 
 ## Create configuration for a new instance
 
-In a dedicated deployment directory, create `.env` once. Reuse existing credentials for an existing instance. This command validates the image variable and generates both credentials before creating the file. It requires OpenSSL and refuses to overwrite an existing file:
+In a dedicated deployment directory, create `.env` once; for an existing instance, reuse its credentials. This command checks the image variable and generates both credentials before it creates the file. It needs OpenSSL and refuses to overwrite an existing file:
 
 ```sh
 (
@@ -53,9 +53,9 @@ EOF
 )
 ```
 
-Keep `.env` out of version control. The ingest and read tokens are separate roles, not interchangeable credentials. Add an admin token only when index administration requires one; it is unnecessary for ordinary ingestion and queries.
+Keep `.env` out of version control. The ingestion token can only write and the read token can only query; don't swap them. Add an admin token only when the user needs index administration. Ingestion and queries don't need one.
 
-For administration, generate another credential with `openssl rand -hex 32` and store it as `LOGBROOK_ADMIN_TOKEN` in `.env`. Docker's `--env-file` forwards it automatically. With Compose, also uncomment the admin-token mapping in the bundled template, then recreate the service. Compose uses `.env` for interpolation and forwards only explicitly mapped variables; adding the token to `.env` alone does not enable administration. Leave the mapping commented when no admin token is configured, since an empty token is invalid.
+For administration, generate another credential with `openssl rand -hex 32` and store it as `LOGBROOK_ADMIN_TOKEN` in `.env`. Docker's `--env-file` passes it through. With Compose, also uncomment the admin-token mapping in the bundled template and recreate the service: Compose uses `.env` only for interpolation and passes only mapped variables, so the token in `.env` alone does nothing. Leave the mapping commented out when there is no admin token, because an empty token is invalid.
 
 ## Docker
 
@@ -79,11 +79,11 @@ docker exec logbrook logbrook healthcheck
 docker exec logbrook logbrook indexes list
 ```
 
-Allow startup to finish before the health check succeeds; inspect `docker logs logbrook` on failure. The image runs as UID/GID `10001:10001` and initializes its `/data` ownership for a fresh named volume. For an existing volume or a host bind mount, arrange writable ownership for that UID/GID. The image has no shell; execute `logbrook` directly, not `sh -c`.
+The health check fails until startup finishes; read `docker logs logbrook` if it keeps failing. The image runs as UID/GID `10001:10001` and sets the ownership of `/data` on a new named volume. For an existing volume or a host bind mount, make it writable by that UID/GID. The image has no shell, so run `logbrook` directly, not through `sh -c`.
 
 ## Docker Compose
 
-Copy [the bundled template](../assets/compose.yaml) into the deployment directory as `compose.yaml`, alongside `.env`. Resolve the template path from the installed skill directory. Set a stable project name so later commands reuse the same volume:
+Copy [the bundled template](../assets/compose.yaml) into the deployment directory as `compose.yaml`, next to `.env`. Resolve the template path from the installed skill directory. Set a fixed project name so later commands reuse the same volume:
 
 ```sh
 export COMPOSE_PROJECT_NAME=logbrook
@@ -92,7 +92,7 @@ docker compose up -d --wait --wait-timeout 120
 docker compose exec -T logbrook logbrook indexes list
 ```
 
-The template uses the image's built-in health check. `config --quiet` validates without printing expanded credentials. Shell variables take precedence over `.env`; unset stale overrides or intentionally update them before recreating the service. To use the repository's own root `compose.yaml` instead, run `docker compose up --build -d --wait` from the checkout; that file builds from source.
+The template relies on the image's built-in health check. `config --quiet` validates the file without printing the expanded credentials. Shell variables override `.env`, so unset stale ones or update them on purpose before recreating the service. To use the repository's root `compose.yaml` instead, which builds from source, run `docker compose up --build -d --wait` in the checkout.
 
 ## Connect applications and verify storage
 
@@ -102,22 +102,22 @@ The template uses the image's built-in health check. `config --quiet` validates 
 | Another service on the same Compose network | `http://logbrook:3100` |
 | Another machine | The deployment's reachable HTTPS reverse-proxy URL |
 
-Inside another container, `127.0.0.1` refers to that container. Join the same Docker network to use service DNS. The default loopback host binding is not reachable from another machine; configure the chosen ingress/proxy explicitly. Logbrook serves HTTP; TLS terminates at the proxy.
+Inside another container, `127.0.0.1` is that container. Join the same Docker network to use the service name. The default host binding is loopback only, so another machine can't reach it until you set up an ingress or reverse proxy. Logbrook serves plain HTTP; terminate TLS at the proxy.
 
-Use [the ingestion probe](application-logging.md#verify-ingestion) to write a uniquely marked event, then query it using the read credential. Restart with `docker restart logbrook` or `docker compose restart logbrook`, wait for readiness, and query the same event again. A successful setup retains that event in the named volume across restart. `docker compose down` retains the volume; `down --volumes` deletes it.
+Use [the ingestion probe](application-logging.md#verify-ingestion) to write a uniquely marked event and query it with the read credential. Restart with `docker restart logbrook` or `docker compose restart logbrook`, wait until it is ready, and query the same event again. If the setup is right, the event is still there. `docker compose down` keeps the volume; `down --volumes` deletes it.
 
 ## Retention, indexes, and TOML
 
-The supplied configuration retains logs for seven days and targets 20 decimal GB **per index**. Each index lives under `/data/indexes/<name>/`. `default` always counts toward the four index slots. Index names allow 1–63 lowercase letters, digits, `_`, or `-`, starting with a letter or digit.
+The supplied configuration keeps logs for seven days and targets 20 decimal GB **per index**. Each index lives under `/data/indexes/<name>/`. `default` always takes one of the four index slots. Index names are 1 to 63 lowercase letters, digits, `_` or `-`, starting with a letter or digit.
 
-- Retention must exceed the archival age. For one-day retention, reduce `LOGBROOK_ARCHIVE_AFTER_MS` below one day as well.
-- Size pressure may expire events before their age limit. The size target is not a hard quota; writes, spill, and pinned files can exceed it. `507` means the index still cannot accept ingestion at its target.
-- DuckDB memory, spill, and queue budgets divide across `max_indexes`, including unused slots. Raising the slot count alone reduces each index's share.
-- Environment changes require container recreation: use `docker compose up -d --wait` after changing `.env`. A plain container restart does not reload its environment.
+- Retention must be longer than the archive age. For one-day retention, also lower `LOGBROOK_ARCHIVE_AFTER_MS` below one day.
+- When an index is over its size target, events can expire before their age limit. The target is not a hard quota: writes, spill and pinned files can go over it. `507` means the index is still over its target and refuses ingestion.
+- DuckDB memory, spill and queue budgets are divided by `max_indexes`, unused slots included, so raising the slot count alone shrinks each index's share.
+- After changing `.env`, recreate the container with `docker compose up -d --wait`. A plain restart doesn't reload the environment.
 
-For distinct ingestion sources, scoped readers, or per-index policies, mount a TOML file read-only at `/etc/logbrook/config.toml` and run `--config /etc/logbrook/config.toml serve`. In Compose, set `command: ["--config", "/etc/logbrook/config.toml", "serve"]` and add the file mount beside the data volume. In Docker, add the bind mount and put those command arguments after the image name. Match file permissions to UID/GID `10001:10001`.
+For separate ingestion sources, scoped readers or per-index policies, mount a TOML file read-only at `/etc/logbrook/config.toml` and run `--config /etc/logbrook/config.toml serve`. In Compose, set `command: ["--config", "/etc/logbrook/config.toml", "serve"]` and add the file mount beside the data volume. In Docker, add the bind mount and put those command arguments after the image name. Match file permissions to UID/GID `10001:10001`.
 
-Use the fully commented [configuration example](https://github.com/sandrinodm/logbrook/blob/main/logbrook.example.toml) for exact keys. Replace every example credential before validation. Settings resolve as defaults, TOML, then supported environment overrides, with explicit per-index policies taking precedence over inherited global policies. When moving to multiple TOML ingestion tokens, remove the single-token environment setting: `LOGBROOK_INGEST_TOKEN` replaces the entire ingestion map. Read-token environment overrides add entries rather than clearing the TOML map; remove placeholders and explicitly configure source scopes.
+Take exact keys from the commented [configuration example](https://github.com/sandrinodm/logbrook/blob/main/logbrook.example.toml), and replace every example credential before validating. Defaults are overridden by TOML, and TOML by the supported environment variables; a per-index policy wins over the global one. When moving to several TOML ingestion tokens, remove `LOGBROOK_INGEST_TOKEN`, because it replaces the whole ingestion map. `LOGBROOK_READ_TOKEN` adds one entry to the TOML read tokens instead of replacing them; if that token isn't already in the TOML file, also set `LOGBROOK_READ_SOURCES` to its sources (empty means all). Remove placeholder tokens from the file.
 
 After editing the Compose mounts, environment, and TOML file, validate the proposed configuration in a fresh one-off container before recreating the server:
 
@@ -127,6 +127,6 @@ docker compose run --rm --no-deps -T logbrook \
   --config /etc/logbrook/config.toml check-config
 ```
 
-This uses the proposed mounts and environment, including changes the running container cannot see. `check-config` validates without opening the data directory. Once it succeeds, apply the configuration with `docker compose up -d --wait`. Shortening retention can delete history on the next maintenance pass; increasing it cannot recover expired data.
+The one-off container sees the new mounts and environment, which the running container can't. `check-config` doesn't open the data directory. Once it passes, apply the configuration with `docker compose up -d --wait`. Shortening retention can delete history on the next maintenance pass, and lengthening it doesn't bring expired data back.
 
 Docker references: [volumes](https://docs.docker.com/engine/storage/volumes/), [Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/), and [Compose networking](https://docs.docker.com/compose/how-tos/networking/).

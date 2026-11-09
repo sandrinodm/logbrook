@@ -2,15 +2,21 @@
 
 ## Storage ownership and durability
 
-One process owns the data root. Each index has its own `indexes/<name>/events.duckdb`, WAL, `archives/` and `temp/` directories. Index names contain 1–63 lowercase ASCII letters, digits, hyphens or underscores, starting with a letter or digit. Managed index directories and files cannot be symlinks. Ingest batches validate atomically and return success after appender flush and transaction commit. A timeout or disconnected client can have an ambiguous result: retrying may duplicate events. Logbrook does not implement producer idempotency keys.
+Only one Logbrook process may use a data root at a time. Each index lives in `indexes/<name>/` with its own `events.duckdb`, WAL, `archives/` and `temp/`. Index names are 1–63 lowercase ASCII letters, digits, hyphens or underscores, and start with a letter or digit. Index directories and files can't be symlinks.
 
-Use the [HTTP CLI](CLI.md) to list index sizes, create indexes, query events, or delete dynamic indexes while the server runs. Configure a separate optional `LOGBROOK_ADMIN_TOKEN` (or TOML `admin_tokens`) for deletion. The default index and indexes declared in server configuration are protected. Deletion drains only the selected index, moves its directory into reserved `.index-trash/` storage, and completes cleanup independently of the client connection. Failed cleanup is retried on startup or a later deletion; this directory is not a recoverable backup. Stop producers first when removing an index permanently because ingestion can recreate a missing index.
+An ingest batch is validated as a whole and the request succeeds only after the transaction commits. If a request times out or the client disconnects, the batch may or may not have committed, and retrying it can store duplicates. Logbrook has no idempotency keys.
 
-The database allocates persistent IDs in the same transaction as events. Readers use separate connections and a transaction containing both hot data and the archive manifest. Short snapshot-registration and manifest-publication critical sections establish generation leases. A long reader keeps its files alive without holding the writer lock; newer readers do not indefinitely pin retired files. Maintenance reclaims eligible files outside the publication lock. Export, compaction and expiry discovery run on the maintenance connection; short manifest/deletion transactions use the writer.
+Use the [HTTP CLI](CLI.md) to list, create, query and delete indexes while the server runs. Deletion needs a separate admin token (`LOGBROOK_ADMIN_TOKEN` or TOML `admin_tokens`), and the `default` index and indexes declared in the configuration can't be deleted. A deleted index's directory moves to `.index-trash/` and is cleaned up even if the client disconnects; failed cleanup is retried at startup or on the next deletion. `.index-trash/` is not a backup. Stop producers first, because the next ingest request recreates a deleted index.
 
-Archive files use relative manifest paths so a complete data directory can be relocated. Temporary or unreferenced `.tmp`/`.parquet` files in the dedicated archive directory are removed at startup; failed unpublished exports are also cleaned during operation. Missing committed files, unexpected byte lengths, or unsupported archive schemas are integrity failures. Data directory paths containing DuckDB glob characters are rejected. Keep unrelated files out of the archive directory. Bundled JSON/Parquet support is included; automatic extension installation and loading are disabled.
+Queries read a consistent snapshot of hot rows and archives on their own connections and don't block ingestion. Archive files a running query is reading stay on disk until it finishes.
 
-The native tests and SIGKILL test exercise application errors and process crashes. They do not establish power-loss guarantees for the underlying disk, filesystem, or virtual machine.
+Archive paths are stored relative to the data root, so a complete data directory can be moved. At startup Logbrook removes `.tmp` and unreferenced `.parquet` files from each archive directory, so keep other files out of it. A missing archive file, a file with an unexpected size or an unsupported archive schema is an integrity failure. The data directory path must be UTF-8 and can't contain `*`, `?`, `[` or `]`. JSON and Parquet support is built in; DuckDB never installs or loads extensions on its own.
+
+Crash recovery is tested by killing the process with SIGKILL. Behavior on power loss depends on your disk, filesystem or VM and isn't tested.
+
+## Fluent Forward ingestion
+
+The optional [Fluent Forward receiver](FORWARD.md) runs in the same process, with its own TOML-only listeners, principals, routes and memory limits. Routes write only to declared indexes and apply the index's retention window. ACKs are sent after the envelope commits, and a sender that retries after a lost ACK can store duplicates. Read [delivery and compatibility](FORWARD.md#delivery-and-compatibility) and the [container example](../examples/forward/compose.yaml) before moving Docker producers.
 
 ## Limits and errors
 
@@ -35,15 +41,24 @@ The native tests and SIGKILL test exercise application errors and process crashe
 | Maintenance native-work deadline | 30 seconds |
 | Graceful shutdown deadline | 30 seconds |
 
-`storage.maintenance_timeout_ms` applies from the start of each maintenance job, including waits for writer capacity and snapshot registration, and native export, retention, publication, and checkpoint work. Cancellation is cooperative. Transaction commit and archive reconciliation finish without interruption to preserve durability. A timeout at that boundary can arrive before the final outcome is known, and the writer remains occupied until finalization completes.
+`storage.maintenance_timeout_ms` limits each maintenance job, including time spent waiting for the writer. A job that times out while committing or reconciling archives finishes that step first, so the timeout can be reported before the outcome is known and the writer stays busy until then.
 
-Raw body permits are acquired incrementally without waiting while holding partial reservations. A bounded RawValue visitor checks event counts and wire sizes, then a structural preflight reserves a conservative JSON-node/string allocation allowance before constructing decoded values. The decoded permit follows the admitted batch through writer completion, including client disconnects. A stalled chunked request does not reserve the entire decoded budget. This is bounded conservative accounting, not an exact allocator or total-RSS cap; native database memory and process overhead require additional headroom.
+The raw and decoded budgets limit memory held by HTTP request bodies. A request that stalls mid-body holds only the bytes it has sent. These budgets don't cap process memory; leave headroom for DuckDB and the rest of the process.
 
-`400` indicates invalid input; `413` indicates request/response size limits; `507` indicates the selected index has reached its disk target; `404` indicates an unknown index; `401`/`403` indicate authentication/scope errors; `429` includes `Retry-After: 1` for capacity pressure; `503` indicates unavailable storage/shutdown; `504` indicates a query deadline. A query's worker remains occupied until the native operation finishes or interruption completes. Body reception has a 5-second idle and 30-second total deadline while holding its incremental raw-byte permits.
+| Status | Meaning |
+| --- | --- |
+| `400` | Invalid input |
+| `401` / `403` | Missing or invalid credential / credential not allowed for this source or index |
+| `404` | Unknown index |
+| `413` | Request or response size limit |
+| `429` | Capacity pressure; includes `Retry-After: 1` |
+| `503` | Storage unavailable or shutting down |
+| `504` | Query deadline; the reader worker stays busy until DuckDB stops the query |
+| `507` | The index has reached its disk target |
 
-Retention is by event time. HTTP ingestion validates against the configured live window and atomically rechecks the persisted cutoff at commit, so enlarging configured retention cannot admit permanently invisible events. The default future skew allowance is five minutes. Offline imports permit historical timestamps; configure retention before serving imported data. Expired rows in mixed-age files become invisible immediately; physical removal still depends on file expiry. Bounded compaction consolidates small files in the same event-time partition. Physical size retention also expires oldest data, subject to the file-allocation behavior below. Partial-expiry archive rewrites are not implemented.
+Retention is by event time. Live ingestion rejects events older than the retention window or more than `max_future_skew_ms` (default five minutes) in the future, and rechecks the stored expiry cutoff at commit. Offline imports accept historical timestamps, so configure retention to cover imported data before serving it. Expired events disappear from queries immediately, but an archive file is deleted only when every event in it has expired; partly expired files aren't rewritten. Compaction merges small files in the same event-time partition.
 
-Configure inherited defaults at the top level and per-index overrides in `[indexes.<name>]`:
+Set inherited defaults at the top level and per-index overrides in `[indexes.<name>]`:
 
 ```toml
 retention_days = 30
@@ -72,62 +87,87 @@ max_size_gb = 20
 | Archive age | `archive_after_ms` | `LOGBROOK_ARCHIVE_AFTER_MS` | `86400000` (1 day) |
 | Maintenance interval | `maintenance_interval_secs` | `LOGBROOK_MAINTENANCE_INTERVAL_SECS` | `60` seconds |
 
-Values must be positive integers; retention must exceed archive age. One-day retention therefore needs a shorter archive age, such as `archive_after_ms = 3600000`. Byte targets must be at least 16 MiB. Day and GB convenience keys take precedence over their canonical global TOML values; supplying both units in an index override or both corresponding environment variables is rejected. An environment value overrides the inherited TOML default regardless of unit. Explicit per-index policies override these inherited defaults. Compose forwards days/GB (7 days/20 GB by default); use its days setting instead of the older milliseconds setting.
+Values must be positive integers. Retention must be longer than the archive age, so one-day retention needs a shorter archive age such as `archive_after_ms = 3600000`. Byte targets must be at least 16 MiB. At the top level of the TOML file, `retention_days` and `max_size_gb` win over `retention_ms` and `storage.max_size_bytes`; an index override or the environment may set only one unit per setting. Environment variables override top-level TOML values in either unit, and per-index settings override both. The root Compose file sets days and GB (7 days and 20 GB by default).
 
-Size is a **per-index measured-footprint retention target**, not a filesystem reservation or exact disk ceiling. It includes database, WAL, archives (including files pinned by readers), spill and other owned files. Maintenance retires oldest event-time groups and waits for active reader leases before reclaiming their files. It attempts bounded hot-row expiry/checkpointing when necessary. DuckDB can reuse freed blocks without shrinking its database file; Logbrook stops repeated destructive hot-row eviction if it makes no physical progress. `VACUUM` is not a file-shrink operation; see [DuckDB’s space-reclamation documentation](https://github.com/duckdb/duckdb-web/blob/main/docs/current/operations_manual/footprint_of_duckdb/reclaiming_space.md). If storage remains at the target, ingestion returns `507` until bytes are reclaimed or the configured target is raised and the service restarted. Monitor physical disk headroom independently: a transaction, export, compaction or query spill can temporarily exceed the target. A filesystem quota is required for an exact hard ceiling. Increasing limits never resurrects expired data.
+The disk target is a per-index retention target for measured file size, not a reservation or a hard limit. It counts the database, WAL, archives (including files held by running queries), spill files and other files Logbrook owns. Over the target, maintenance deletes the oldest event-time groups once queries release their files, and expires hot rows if needed. DuckDB reuses freed blocks but doesn't shrink its database file, even with `VACUUM` (see [DuckDB's space-reclamation documentation](https://github.com/duckdb/duckdb-web/blob/main/docs/current/operations_manual/footprint_of_duckdb/reclaiming_space.md)), so Logbrook stops evicting hot rows when that frees no space. While the index stays at its target, ingestion returns `507` until space is reclaimed or you raise the target and restart. Transactions, exports, compaction and query spills can briefly exceed the target, so monitor free disk separately and use a filesystem quota if you need a hard limit.
 
-HTTP request, body, decoded-memory, connection and tail budgets are shared across all indexes. `storage.memory_limit`, `storage.temp_limit` and `storage.queue_bytes` are divided by `max_indexes`, including unused slots, so creating an index does not multiply those configured budgets. Default 512 MB / 4 yields 128 MB per DuckDB instance. Reader and execution thread settings are per index; more indexes increase native thread and connection overhead. Set `max_indexes = 1` for a single-index deployment or increase total budgets when adding slots. DuckDB memory limits do not cap total process RSS.
+HTTP request, body, decoded-memory, connection and tail budgets are shared by all indexes. `storage.memory_limit`, `storage.temp_limit` and `storage.queue_bytes` are divided by `max_indexes`, counting unused slots, so creating an index doesn't add to those budgets. With the defaults, 512 MB / 4 gives each DuckDB instance 128 MB. Reader and DuckDB thread settings apply per index, so each index adds threads and connections. Set `max_indexes = 1` for a single-index deployment, or raise the total budgets when adding slots. DuckDB's memory limit doesn't cap the process's RSS.
 
-An authenticated `POST /indexes/payments/logs/ingest` creates a missing index; `PUT /indexes/payments` explicitly creates it and is idempotent. `GET /indexes` requires a reader and lists only indexes it may access. Unknown-index reads return `404`. Optional `[ingest_index_scopes]` and `[read_index_scopes]` maps associate an existing token with allowed index names; a missing entry or empty list grants all indexes. Existing source scopes still apply. The unprefixed `/logs` endpoints target `default` and enforce its index scope. Global metrics require unrestricted source and index access. Storage metric series carry an `index` label; HTTP request limits and histograms remain global.
+An authenticated `POST /indexes/payments/logs/ingest` creates the index if it's missing; `PUT /indexes/payments` creates it explicitly and is idempotent. `GET /indexes` needs a read token and lists only the indexes that token can read. Reads from an unknown index return `404`. The optional `[ingest_index_scopes]` and `[read_index_scopes]` tables map an existing token to the index names it may use; a missing entry or an empty list allows every index. Source scopes still apply. The unprefixed `/logs` endpoints use `default` and check its index scope. `/metrics` needs a read token with access to every source and index. Storage metrics have an `index` label; HTTP limits and histograms are global.
 
-`logbrook_ingested_events_total` counts events committed across all indexes since this server process started. Deleting an index or expiring its events does not decrease the counter. Restarting the server resets it to zero; existing stored events are not counted again.
+DuckDB query progress is exported as `logbrook_storage_query_progress_available`, `_fraction` (0 to 1), `_rows_processed` and `_rows_total`, with a `role` label (`reader` or `maintenance`) and a `worker` label per connection. When a connection is idle or DuckDB can't estimate a query, `_available` is 0 and the other gauges are NaN. The estimates don't affect cancellation or deadlines.
 
-Changes take effect on restart, with maintenance starting immediately and then repeating at the configured interval. A shorter retention can expire existing events on that first pass. The persisted expiry cutoff only advances: increasing retention never resurrects expired data, and live ingestion still rejects timestamps earlier than that cutoff. Queries use the committed cutoff, which is exposed as `logbrook_storage_retention_before_ms`; they do not promise physical deletion at the exact wall-clock expiry millisecond. A file containing both retained and expired events remains until fully expired. Archival itself preserves searchability and is independent of deletion.
+`logbrook_ingested_events_total` counts events committed across all indexes since the process started. Deleting an index or expiring events doesn't lower it, and a restart resets it to zero without recounting stored events.
 
-`cargo test --package logbrook --test process retention_override_reclaims_archives_and_persists_monotonic_cutoff --locked` verifies TOML/environment precedence, restart behavior, archived-event expiry, physical removal of fully expired files, recent-event survival and the monotonic cutoff using disposable data.
+Policy changes apply on restart. Maintenance runs once at startup and then at the configured interval, so a shorter retention can expire existing events on that first pass. The stored expiry cutoff only moves forward: raising retention never brings back expired events, and live ingestion keeps rejecting timestamps before the cutoff. Queries use the committed cutoff, exported as `logbrook_storage_retention_before_ms`, rather than the wall clock.
 
-Recoverable maintenance failures keep reads and ingestion available and retry with bounded exponential backoff, up to fifteen minutes. Fatal integrity/invalidated-connection failures stop readiness and trigger supervised shutdown. Post-commit unlink failures are retried; they do not undo committed retention. Shutdown cancels maintenance, drains/stops readers, then checkpoints the writer. Monitor filesystem space, archive growth, database/WAL/temp size, deferred unlinks, queue occupancy, latency and failures through protected metrics and container monitoring. `/ready` is not a predictive free-disk monitor.
+If maintenance fails in a way it can recover from, reads and ingestion keep working and maintenance retries with exponential backoff, up to 15 minutes between attempts. Integrity failures and broken database connections mark the server unready and shut it down. A failed file deletion after a committed expiry is retried; the expiry stands. On shutdown, Logbrook cancels maintenance, drains the readers and checkpoints the writer. Watch free disk space, archive growth, database, WAL and temp size, pending deletions, queue occupancy, latency and failures through `/metrics` and your container monitoring. `/ready` doesn't warn about low disk space.
 
-Transactions currently commit one request at a time. Producers should send bounded batches for throughput. There is no across-request batching delay or coalescing yet. Performance tuning must measure mixed ingestion, search, and archive work together.
+Each request commits in its own transaction, and Logbrook doesn't combine requests, so send events in batches for throughput.
 
-`logbrook healthcheck` probes `/ready` without requiring credentials or opening storage. It reads the bind address from optional `--config` and then `LOGBROOK_BIND`. Container defaults use port 3100; override `LOGBROOK_BIND` consistently when changing the container's port.
+`logbrook healthcheck` checks `/ready` without credentials and without opening storage. It reads the bind address from `--config` if given, then `LOGBROOK_BIND`. The container listens on port 3100; if you change the port, set `LOGBROOK_BIND` to match.
 
 ## Live tail
 
-Tail uses persistent ingestion IDs, so retained late events are included even when their event time is old. A new stream starts at the current ingestion high-water mark. Supply `Last-Event-ID` to replay newer retained events. Field filters are applied on the server. Results are paged using actual encoded byte cost and drained immediately while data remains; a 1,000-event backlog is not itself a gap. Commit notifications wake caught-up streams, with a fallback poll for retention/shutdown. Downstream demand supplies backpressure and each subscriber holds a bounded page. Retention expiry sends a terminal `gap`; an oversized stored event can produce an explicit size/error response. The retention watermark is deliberately conservative across sources, so a scoped reader can receive a gap after another source expires. A gap never promises that expired data remains recoverable.
+Tail follows ingestion order, not event time, so late events with old timestamps still show up. A new stream starts after the newest committed event; send `Last-Event-ID` to resume from an earlier one. Field filters run on the server. A backlog is sent in pages until the stream catches up; a large backlog alone doesn't cause a gap. A slow client slows only its own stream. If retention expires events a stream hasn't sent yet, the stream ends with a `gap` event; a stored event too large to send produces an explicit error. The expiry check covers all sources, so a reader scoped to one source can get a gap when another source's events expire.
 
 ## Back up, restore, and upgrade
 
-1. Stop the service and wait for clean exit. Do not copy a live data directory with a plain recursive copy.
-2. Copy the **entire** data directory, including any WAL and all manifest-referenced archive files, as one consistent backup.
-3. Restore into a different empty directory, keep its files owned by the service UID, and start one process pointing at it.
-4. Verify event counts and representative complete events before switching producers.
+1. Stop the service and wait for it to exit cleanly. Don't copy a live data directory with a plain recursive copy.
+2. Copy the **entire** data directory, including any WAL and all archive files, as one backup.
+3. Restore into a different empty directory, keep the files owned by the service user, and start one process on it.
+4. Check event counts and a few complete events before switching producers.
 
-For a container volume, stop the service and use a temporary utility container to copy the entire volume to a separate backup destination. Backups must include both DuckDB and Parquet; neither alone contains the complete retained dataset.
+For a container volume, stop the service and copy the whole volume to a separate backup location with a temporary utility container. A backup needs both the DuckDB files and the Parquet archives; neither holds all retained data alone.
 
-Schema versions are checked at startup and migrations run transactionally. The current schema is version 3: it adds archive ID bounds, byte sizes and schema versions to version 2's retention watermark. Older archive metadata is backfilled from immutable files before serving. Explicit canonical projections and name-based archive mapping preserve missing nullable columns. Newer schemas are rejected. Upgrade on a copy first; for rollback, restore the pre-upgrade data copy and prior binary together. No downgrade migration is provided.
+Startup checks schema versions and runs migrations in a transaction. Indexes without promoted string attributes stay on schema version 3; turning them on upgrades that index to version 4. Older archive metadata is migrated before the server starts serving. Startup rejects schema versions newer than the binary supports, and a binary that only knows version 3 refuses a version 4 index. There are no downgrade migrations: upgrade a copy first, and to roll back, restore the pre-upgrade backup together with the previous binary.
+
+## Promoted string attributes
+
+For top-level string attributes you filter on often, configure a small set of physical columns:
+
+```toml
+[storage]
+promoted_string_keys = ["runId", "actorJobId", "videoId"]
+```
+
+`indexes.<name>.promoted_string_keys` overrides the global list for one index. You can promote up to eight distinct keys, each 1–256 UTF-8 bytes. Only string equality filters on those keys get faster; numeric and boolean filters and other keys use the JSON path as before. Query results, live tail, authorization and cursors behave the same.
+
+Existing hot rows aren't covered and keep using JSON filtering; new rows get the columns. Export and compaction backfill older data over time. Archive files above the compaction byte limit, and rows with malformed JSON, stay on the JSON path. Missing, null and non-string values are stored as NULL, distinct from uncovered rows.
+
+An index is activated the first time it opens with a non-empty key set, and from then on its keys are fixed. The same keys in a different order are accepted. Omitting the setting or setting `[]` keeps the recorded keys rather than removing them, and a different non-empty set is rejected at startup. To change the keys, create a new index and reimport. An empty per-index override stops inheritance of the global list only for an index that isn't activated yet.
+
+Promoted archives carry SHA-256 digests, checked at startup and around query and compaction reads. Never modify archive files in place: a mismatch fails the operation and can mark the index unready. The digests catch accidental changes, not someone who can also rewrite the database and its manifest. Hashing adds some CPU cost to writes and archive reads.
+
+Stop the server before inspecting an index offline:
+
+```sh
+logbrook --config logbrook.local.toml --index payments projection-status
+```
+
+The JSON output shows the schema version, the recorded keys, hot and archived row counts, how many of each are covered, and the number of archive files written before schema version 4. With a non-empty key set configured, the command activates an index that isn't activated yet, so take an offline backup first. It verifies the archives it reads, uses the normal query deadline, and has no HTTP equivalent.
 
 ## Migrate an older flat Logbrook data directory
 
-Startup refuses the old `<data_dir>/events.duckdb` layout instead of silently creating an empty default index. Stop the old process and make a complete offline backup first. Create `<data_dir>/indexes/default/` and move `events.duckdb`, `events.duckdb.wal` if present, `archives/`, and `temp/` together into it. Do not modify relative archive paths inside the database. Restart with the data root still pointing to `<data_dir>`, then verify event counts. A rollback requires restoring the backup and prior binary together.
+Logbrook refuses to start on the flat `<data_dir>/events.duckdb` layout rather than create an empty `default` index next to it. Stop the old process and take a complete offline backup. Create `<data_dir>/indexes/default/` and move `events.duckdb`, `events.duckdb.wal` if present, `archives/` and `temp/` into it together. Don't change the archive paths stored in the database. Restart with the data root still set to `<data_dir>` and check event counts. To roll back, restore the backup together with the previous binary.
 
 ## Import Pino events
 
-Stop the destination service before running import commands. Use the same config file or supported environment variables as the server. JSON arrays must fit one request; NDJSON is streamed in bounded batches.
+Stop the destination service before importing. Use the same config file or environment variables as the server. A JSON array must fit in one request; NDJSON is streamed in bounded batches.
 
 ```sh
 target/release/logbrook --config logbrook.local.toml --index payments import events.json --source checkout
 target/release/logbrook --config logbrook.local.toml --index payments import events.ndjson --source checkout --ndjson
 ```
 
-Offline import and archive commands accept `--index <name>` (default `default`) and use the same named folder layout. Each batch commits independently. If a later batch is invalid or the process stops, prior batches remain. Restarting the whole import may duplicate those events. Use a new destination directory for a clean retry. Imports preserve event time, so configure retention to cover the imported history before starting the server.
+Offline import and archive commands take `--index <name>` (default `default`). Each batch commits on its own. If a later batch is invalid or the process stops, earlier batches stay, and rerunning the whole import duplicates them. For a clean retry, import into a new data directory. Imports keep each event's time, so set retention to cover the imported history before starting the server.
 
 ## Archive events offline
 
-Stop the service before running an offline archive command. To move recent events into Parquet files for verification:
+Stop the service first. To move hot events older than a cutoff into Parquet archives:
 
 ```sh
 target/release/logbrook --config logbrook.local.toml archive --before 1791321600000
 ```
 
-`before` is an exclusive Unix-millisecond cutoff. This command does not delete retained history; it moves matching hot events into the searchable archive.
+`--before` is an exclusive Unix-millisecond cutoff. Archiving doesn't delete anything; archived events stay searchable.

@@ -2,22 +2,23 @@
 
 [![GHCR container image](https://img.shields.io/badge/GHCR-container%20image-2496ED?logo=docker&logoColor=white)](https://github.com/sandrinodm/logbrook/pkgs/container/logbrook)
 
-Lightweight, self-hosted log search for structured application logs.
+Self-hosted log search for structured application logs.
 
 Logbrook is a single Rust executable that receives JSON logs over HTTP, stores recent events in an embedded DuckDB database, moves older events into local Parquet files, and searches both through its CLI and HTTP API. It runs on one server with one data directory and needs no external database or message queue.
 
-> **Status:** Logbrook is pre-release software. Build it from source as described below. APIs and storage formats may change before a stable release.
+> **Status:** Logbrook is pre-release software. Each [release](https://github.com/sandrinodm/logbrook/releases) publishes a container image for Linux amd64 and arm64 to `ghcr.io/sandrinodm/logbrook`; you can also build it from source as described below. APIs and storage formats may change before a stable release.
 
 ## Features
 
 - **HTTP ingestion** of Pino-style JSON arrays or NDJSON, authenticated with ingestion tokens that each map to a source. Success is returned only after the batch is committed.
 - **Named indexes**, each with its own retention period and disk-size target. The first authorized write to a new index creates it, up to a configurable index limit.
-- **Search** by time range, source, service, logger, host, minimum level, and message substring, with cursor pagination, counts, facets, and histograms.
+- **Search** by time range, source, service, logger, host, minimum level, message substring, and exact attribute values, with cursor pagination, counts, facets, and histograms.
 - **Live tail** over server-sent events, with replay after reconnects and an explicit notice when events were missed.
 - **Parquet archival** of older events, which stay searchable together with recent ones.
 - **CLI** in the same executable for querying, counting, and managing indexes on a running server.
+- **Fluent Forward receiver**, off by default, for Docker's `fluentd` logging driver, Fluentd, and Fluent Bit.
 - **Offline import** of Pino JSON or NDJSON files.
-- **Operations support**: Prometheus metrics, health and readiness endpoints, and a hardened container image.
+- **Operations**: Prometheus metrics, health and readiness endpoints, and a Distroless container image with no shell that runs as UID 10001.
 
 ## How it works
 
@@ -31,7 +32,7 @@ These steps build Logbrook from source and run it in the foreground on `127.0.0.
 
 ### Prerequisites
 
-- **Rust** via [rustup](https://rustup.rs). The repository pins Rust 1.99.0 in `rust-toolchain.toml`; rustup installs that version on the first `cargo` command.
+- **Rust** via [rustup](https://rustup.rs). The repository pins Rust 1.99.1 in `rust-toolchain.toml`; rustup installs that version on the first `cargo` command.
 - **A C++ compiler** for the bundled DuckDB build. On macOS, install the Xcode command-line tools with `xcode-select --install`.
 - **`openssl` and `curl`** for the commands below.
 
@@ -121,7 +122,7 @@ For a complete Node.js setup with batching, child loggers, error serialization, 
 
 ## Use the CLI
 
-The `logbrook` executable is also an HTTP client for a running server. It reads the server address from `LOGBROOK_URL` (default `http://127.0.0.1:3100`) and chooses a credential from the role variables described in [Credentials](#credentials):
+The `logbrook` executable is also an HTTP client for a running server. It reads the server address from `LOGBROOK_URL` (default `http://127.0.0.1:3100`). It takes the token from `--token` or `LOGBROOK_TOKEN`, and otherwise from the role variables described in [Credentials](#credentials):
 
 ```sh
 logbrook indexes list                  # Size, size target, retention, readiness
@@ -198,7 +199,7 @@ max_size_gb = 5
 - The size target counts database, WAL, archive, and temporary files. Maintenance expires the oldest events first, and ingestion returns `507` while the index remains at its target. It is not a hard ceiling: writes, maintenance, and query spill can briefly exceed it, and DuckDB can keep freed space allocated. Use a filesystem or volume quota when you need a hard limit.
 - `retention_ms` (`LOGBROOK_RETENTION_MS`) and `max_size_bytes` (`LOGBROOK_MAX_SIZE_BYTES`) are also accepted. Do not set both units for the same setting in the environment.
 
-The [operations guide](docs/OPERATIONS.md) documents every limit and setting, size-target behavior, backup and restore, upgrades, migration from the older flat data layout, and offline imports.
+The [operations guide](docs/OPERATIONS.md) documents every limit and setting, size-target behavior, backup and restore, upgrades, data-layout migration, and offline imports.
 
 ## HTTP API
 
@@ -220,7 +221,7 @@ The [API reference](docs/API.md) covers authentication, request and response for
 | `GET /metrics` | Prometheus metrics (unrestricted read credential) |
 
 - Search, count, facets, and histogram require `from` and `to` in Unix milliseconds. The range is UTC, includes `from`, excludes `to`, and may span at most 31 days by default (`max_query_range_ms`).
-- Filters are `source` (comma-separated), `service`, `logger`, `host`, `message` (case-sensitive substring), and `min_level`. Live tail accepts the same filters.
+- Filters are `source` (comma-separated), `service`, `logger`, `host`, `message` (case-sensitive substring), `min_level`, and `filter` (URL-encoded JSON with exact top-level attribute matches). Live tail accepts the same filters.
 - Search returns 100 events by default and at most 1,000 (`limit`). Use `next_cursor` with the same range and filters to fetch the next page. Cursors belong to one index and can expire when retention removes data.
 - Event IDs are JSON strings. Reads from an unknown index return `404` and create nothing.
 - The unprefixed `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram`, and `/logs/tail` routes are aliases for the `default` index.
@@ -229,14 +230,9 @@ The [API reference](docs/API.md) covers authentication, request and response for
 
 - **One process per data directory.** There is no clustering or replication.
 - **Committed acknowledgments, with possible duplicates.** A success response means the batch was committed. If a client loses the response after commit and retries, the events are stored twice. Logbrook has no idempotency keys or deduplication; delivery also depends on the client's buffering and retry policy.
-- **Crash testing covers process kills.** It does not establish guarantees for power loss or failures of the underlying disk, filesystem, or virtual machine.
+- **Crash tests kill the process.** They don't cover power loss or disk, filesystem, or VM failures.
 - **Plain HTTP only.** Use a reverse proxy for TLS.
 - **Structured filters only.** There is no query language or SQL endpoint.
-- **Performance is workload-specific.** Capacity depends on data volume, query selectivity, storage, and resource limits.
-
-## How it works
-
-Axum and Tokio handle HTTP. Each index has dedicated writer, reader, and maintenance threads that own their DuckDB connections. The writer acknowledges a batch only after the appender is flushed and the transaction commits. Ingestion queues and decoded request bodies have memory budgets, and queries have deadlines with native interruption. Maintenance exports older events to Parquet, flushes and renames each file, then publishes it in a manifest and removes the exported rows in one transaction. Searches read recent rows and archived files together.
 
 ## Development
 
@@ -249,11 +245,11 @@ cargo build --package logbrook --locked
 cargo test --workspace --all-targets --locked
 ```
 
-Rust integration tests use temporary DuckDB databases and disposable servers. The process tests in `tests/process.rs` verify acknowledged ingestion after SIGKILL, restart, Parquet archival, relocated restore, retention, per-index limits, and management CLI behavior. Workspace tests also check load scheduling, bounded shutdown, and report accounting. The release and skill-example tests require Bash, Git, jq, and OpenSSL; they use local Git remotes and temporary configuration files.
+Tests use temporary data directories and disposable servers. The process tests in `tests/process.rs` start a real server and check that acknowledged events survive SIGKILL, and cover restart, Parquet archival, restore to a new path, retention, per-index limits, and the management CLI. The release and skill-example tests need Bash, Git, jq, and OpenSSL.
 
-The [developer tools](xtask/README.md) provide container verification and repeatable load generators through `cargo xtask`. Their dependencies belong to the separate `logbrook-dev` workspace package under `xtask/` and are not included in the server executable or runtime image.
+`cargo xtask` runs the [developer tools](xtask/README.md): container verification and load generators. They live in the separate `logbrook-dev` package under `xtask/`, so their dependencies stay out of the server executable and image.
 
-The Pino example has its own tests and requires Node.js 24 with npm:
+The Pino example has its own tests. CI checks it with Node.js 26.13.0 and npm:
 
 ```sh
 (cd examples/pino-logger && npm ci && npm run format:check && npm test)
@@ -265,9 +261,10 @@ The Pino example has its own tests and requires Node.js 24 with npm:
 - [API reference](docs/API.md): HTTP endpoints, authentication, payloads, and errors.
 - [CLI guide](docs/CLI.md): remote commands, credentials, pagination, and index deletion.
 - [Query cookbook](docs/QUERY-EXAMPLES.md): CLI and HTTP recipes with a reproducible demo dataset.
+- [Fluent Forward receiver](docs/FORWARD.md): Docker logging, collector routing, authentication, and committed acknowledgments.
 - [Operations and migration](docs/OPERATIONS.md): limits, retention, backups, upgrades, and imports.
 - [Container packaging](docs/CONTAINER.md): image contents, hardening, and verification.
-- [Releases and images](docs/RELEASING.md): automated versioning, Git tags, GitHub releases, and GHCR publication.
+- [Releases and images](docs/RELEASING.md): versioning, Git tags, GitHub releases, and GHCR publication.
 - [Pino example](examples/pino-logger/README.md): sending logs from Node.js.
 - [Agent skill](skills/logbrook/SKILL.md): Docker installation, application logging, and log investigations. Copy the whole `skills/logbrook` directory into your agent's skill directory, or point the agent at its `SKILL.md` in this checkout.
 

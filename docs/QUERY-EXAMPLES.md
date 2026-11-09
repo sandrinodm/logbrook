@@ -1,10 +1,10 @@
 # Query cookbook
 
-Copyable examples for the current Logbrook CLI and HTTP API, from finding one error to exporting an incident window. Search, count, facets, and histograms automatically include retained hot events and Parquet archives in the selected index.
+Examples for the Logbrook CLI and HTTP API, from finding one error to exporting an incident window. Search, count, facets and histograms include archived events as well as recent ones.
 
 ## 1. Connect and choose an index
 
-These examples use Bash or Zsh, a running server, and a read credential. HTTP examples use `curl`; JSON processing uses `jq`. The inline demo and UTC date conversion also use `jq`. Run repository-relative commands from the Logbrook repository root.
+The examples need Bash or Zsh, `jq`, a running server and a read token. The HTTP examples also use `curl`. Run commands with repository paths from the repository root.
 
 ```sh
 export LOGBROOK_URL=http://127.0.0.1:3100
@@ -21,13 +21,13 @@ If `logbrook` is not on PATH, define this function for the current shell after b
 logbrook() { ./target/debug/logbrook "$@"; }
 ```
 
-Use `target/release/logbrook` in that function for a release build. You can use an existing populated index and skip the demo below. With Compose, `docker compose exec logbrook logbrook query checkout --since 1h` uses the same CLI inside the running container.
+Use `target/release/logbrook` instead for a release build. With Compose, run the same CLI inside the container, for example `docker compose exec logbrook logbrook query checkout --since 1h`. If you already have an index with data, you can skip the demo below.
 
-Queries use `LOGBROOK_READ_TOKEN`. An explicit `--token` or `LOGBROOK_TOKEN` overrides it; clear those overrides if they select the wrong credential. Admin credentials manage indexes but cannot query events. A request addresses one index; index names do not accept wildcards.
+Queries use `LOGBROOK_READ_TOKEN` unless `--token` or `LOGBROOK_TOKEN` is set, so unset those if they hold a different token. Admin tokens manage indexes but cannot query events. Each request reads one index, and index names have no wildcards.
 
 ## 2. Optional demo: twelve events with known answers
 
-Use a fresh index so the expected results below are reproducible. You need an ingestion credential permitted to create that index, a read credential permitted to read it and its source, and a free index slot. Default `max_indexes` is four, including `default`. Repeating the ingestion appends duplicates, so generate a new index for a fresh run.
+The expected results below assume a fresh index. You need an ingestion token allowed to create it, a read token allowed to read it and the ingestion token's source, and a free index slot (`max_indexes` defaults to four, including `default`). Running the ingestion twice stores duplicates, so use a new index name for each run.
 
 ```sh
 export LOGBROOK_INGEST_TOKEN='<your configured ingestion token>'
@@ -82,7 +82,7 @@ jq -n --argjson until "$QUERY_TO_MS" '
     --data-binary @-
 ```
 
-Expected acknowledgment: `{"accepted":12}`. Timestamps span 50 minutes to one minute before `QUERY_TO_MS`, so they work with the default seven-day retention window. A custom retention period shorter than 50 minutes will reject this fixture.
+Expected response: `{"accepted":12}`. The timestamps run from 50 minutes to one minute before `QUERY_TO_MS`, which fits the default seven-day retention. A retention shorter than 50 minutes rejects the batch.
 
 | Fixture fields | Values |
 | --- | --- |
@@ -93,7 +93,7 @@ Expected acknowledgment: `{"accepted":12}`. Timestamps span 50 minutes to one mi
 | Messages | Two contain lowercase `timeout`; one contains capitalized `Timeout` |
 | Custom attributes | `requestId`, and where applicable `statusCode`, `durationMs`, `orderId`, `userId`, `jobId` |
 
-The fixture sends Pino-style `time`, `msg`, `name`, and `hostname`. Search responses expose these as `event_time`, `message`, `logger`, and `host`. Other fields become `attributes`: `requestId` becomes `attributes.requestId`. The canonical `source` comes from the ingestion credential, not a field in the payload. Event `id` is a server-generated JSON string.
+The fixture sends Pino-style `time`, `msg`, `name` and `hostname`, which search returns as `event_time`, `message`, `logger` and `host`. Other fields go under `attributes`, so `requestId` becomes `attributes.requestId`. `source` comes from the ingestion token, not the payload, and the server assigns each event an `id` as a JSON string.
 
 ## 3. Read recent events
 
@@ -111,20 +111,20 @@ logbrook query "$QUERY_INDEX" --since 1h --json
 logbrook query "$QUERY_INDEX" --since 7d --limit 100
 ```
 
-Order is descending `event_time`, then descending `id` for ties. There is no configurable sort order. `--since` accepts a positive integer with `ms`, `s`, `m`, `h`, `d`, or `w`: for example `500ms`, `30s`, `15m`, `2h`, `7d`, or `1w`. A relative window is recalculated on each request. Returned events must still exist under the index's age and size retention policies.
+Results are newest first by `event_time`, then by descending `id` for ties, and the order cannot be changed. `--since` takes a positive integer with an `ms`, `s`, `m`, `h`, `d` or `w` suffix, such as `500ms`, `15m`, `2h` or `1w`, and is measured from the moment each command runs. Events already removed by age or size retention are not returned.
 
 ## 4. Freeze an investigation window
 
-For consistent examples, comparisons, and pagination, keep the same `[from, to)` bounds. If you seeded the demo, keep its `QUERY_FROM_MS` and `QUERY_TO_MS`. For existing data, capture a new hour once:
+Comparisons and pagination need fixed `[from, to)` bounds. If you seeded the demo, keep its `QUERY_FROM_MS` and `QUERY_TO_MS`. For existing data, capture the last hour once:
 
 ```sh
 export QUERY_TO_MS=$(jq -nr 'now * 1000 | floor')
 export QUERY_FROM_MS=$((QUERY_TO_MS - 3600000))
 ```
 
-`from` is inclusive; `to` is exclusive. Both are Unix **milliseconds**, not seconds. Events exactly at the end belong to the next adjacent window. The CLI requires both bounds and rejects combining them with `--since`.
+`from` is inclusive and `to` is exclusive, so an event exactly at `to` belongs to the next window. Both are Unix **milliseconds**, not seconds. The CLI needs both bounds together and rejects them combined with `--since`.
 
-Define a helper to reuse the index and bounds throughout the remaining examples:
+The rest of the examples use these helpers for the index and bounds:
 
 ```sh
 query_window() {
@@ -140,7 +140,7 @@ query_window --limit 50
 count_window                  # Demo: 12
 ```
 
-To investigate a named UTC incident window, convert UTC dates instead of relying on platform-specific `date` flags. Edit the dates for your incident:
+To look at a specific incident, convert its UTC start and end with `jq`, which avoids platform-specific `date` flags:
 
 ```sh
 export QUERY_FROM_MS=$(jq -nr '"2026-10-07T14:00:00Z" | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime * 1000')
@@ -148,7 +148,7 @@ export QUERY_TO_MS=$(jq -nr '"2026-10-07T14:30:00Z" | strptime("%Y-%m-%dT%H:%M:%
 query_window --json
 ```
 
-Changing these variables changes the helpers. Restore the demo's original bounds before comparing its expected counts. The default maximum query span is 31 days; a larger span needs separate windows or an operator-configured higher maximum.
+The helpers read these variables, so set the demo's bounds back before comparing its expected counts. A query can span at most 31 days by default; split longer windows or raise the server's maximum.
 
 ## 5. Find warnings and errors
 
@@ -165,7 +165,7 @@ count_window --min-level 50 --json    # {"count":5}
 query_window --min-level 60
 ```
 
-The examples use the common numeric convention `10=trace`, `20=debug`, `30=info`, `40=warn`, `50=error`, `60=fatal`. Logbrook stores nonnegative numeric levels; `--min-level 50` means `level >= 50`, not exact level 50. There is no server-side exact-level or maximum-level filter.
+The examples use Pino's level numbers: `10=trace`, `20=debug`, `30=info`, `40=warn`, `50=error`, `60=fatal`. Logbrook stores any nonnegative integer level. `--min-level 50` means `level >= 50`, not exactly 50, and the server has no exact-level or maximum-level filter.
 
 ## 6. Narrow an incident by service, logger, host, and source
 
@@ -187,9 +187,9 @@ query_window --source production
 query_window --source production,staging --service api
 ```
 
-Different filters combine with **AND**. `service`, `logger`, and `host` are exact, case-sensitive values: `--service api` does not match `api-worker` or `API`. Only `source` accepts a comma-separated list, meaning production **OR** staging within that filter; do not put spaces around the commas. A comma in a service value is literal, not an OR operator.
+Different filters combine with **AND**. `service`, `logger` and `host` match exact, case-sensitive values: `--service api` does not match `api-worker` or `API`. Only `source` takes a comma-separated list, meaning production **OR** staging; don't put spaces around the commas. A comma in any other filter is a literal character.
 
-Omitting `--source` searches the sources allowed by your read credential. Explicitly requesting a source outside that scope returns `403`; it is not silently ignored. The source examples match the demo only if its ingestion credential was configured with those names.
+Without `--source`, a query searches every source your read token allows. Naming a source outside that list returns `403`. The source examples match demo events only if the demo's ingestion token writes to one of those sources.
 
 ## 7. Search messages literally
 
@@ -210,7 +210,7 @@ query_window --message 'rate limit 100% reached'
 query_window --service api --min-level 50 --message timeout
 ```
 
-Message matching is a literal substring operation. `%`, `_`, `*`, `|`, and parentheses have no wildcard or regular-expression meaning. `--message 'timeout|declined'` searches for that exact text. A string such as `service:api AND level:50` is not a query language. For case-insensitive matching, OR/NOT conditions, or custom attributes, see the export recipes below.
+`--message` matches a literal substring. `%`, `_`, `*`, `|` and parentheses are ordinary characters, so `--message 'timeout|declined'` looks for that exact text, and `service:api AND level:50` is just a string. Top-level attribute equality goes through `--filter`. For case-insensitive matching, OR and NOT, nested attributes or ranges, use the export recipes below.
 
 ## 8. Count the full matching window
 
@@ -221,7 +221,7 @@ count_window --message ord-42                # Demo: 2
 count_window --service api --min-level 50     # Demo: 3
 ```
 
-Count is computed server-side over all matching retained events, independent of the search page size. Search/count/facet/histogram requests each take their own snapshot; concurrent ingestion or retention can make separately requested totals differ even with identical bounds.
+The server counts every matching event in the window, whatever the search page size. Each search, count, facet or histogram request reads the data at its own point in time, so two requests with identical bounds can disagree while ingestion or retention runs.
 
 ## 9. Fetch the next page
 
@@ -235,15 +235,15 @@ if [ -n "$cursor" ]; then
 fi
 ```
 
-The first demo page contains requests `req-012`, `req-011`, and `req-010`; the next contains `req-009`, `req-008`, and `req-007`. Treat `next_cursor` as opaque. Stop when it is null; do not invent offsets or reconstruct cursors from event IDs.
+The first demo page holds `req-012`, `req-011` and `req-010`, and the next holds `req-009`, `req-008` and `req-007`. Stop when `next_cursor` is null. Treat it as opaque: there are no offsets, and you can't build a cursor from event IDs.
 
-Reuse the same index, time bounds, filters, and page size on subsequent requests. The CLI requires explicit bounds with a cursor. The server checks the named-index prefix and cursor position/high-water mark; it does not encode the complete filter set into the cursor. Keeping filters unchanged is the client's responsibility.
+Every page request must repeat the index, time bounds, filters and page size, and the CLI requires explicit bounds with `--cursor`. If the index, route style, bounds, filters, sources or page size change, the server returns `400`. Listing the same sources or attribute conditions in a different order is fine.
 
-A cursor fixes an ingestion high-water mark, excluding events ingested after the first page even when their event times lie inside the window. Retention can still remove events or expire the cursor; this is not a permanent frozen snapshot. Start a new search to include newly ingested events.
+Pages only include events ingested before the first page, even if newer events fall inside the window; start a new search to see them. Retention can still remove events between pages or expire the cursor.
 
 ## 10. Export every page as NDJSON
 
-This loop writes `query-export.ndjson` in the current directory, replacing that file if it exists. It holds bounds and filters fixed and stops on the last page. A failed request leaves a partial export and returns nonzero; discard that partial file before retrying.
+This loop writes every page to `query-export.ndjson` in the current directory, replacing any existing file, and stops after the last page. If a request fails, the loop exits nonzero and leaves a partial file; delete it before retrying.
 
 ```sh
 (
@@ -264,11 +264,20 @@ This loop writes `query-export.ndjson` in the current directory, replacing that 
 wc -l < query-export.ndjson              # Demo: 12
 ```
 
-Three events per page make the demo visibly paginate. For larger exports, choose a suitable page size up to the server's configured maximum (default 1,000). This exports all matching events still available while pages are read; it cannot recover data expired by retention.
+The demo uses three events per page so you can see it paginate. For real exports, use a larger page size, up to the server's maximum (1,000 by default). Events that retention removes before their page is read are not exported.
 
-## 11. Inspect attributes and do client-side filtering
+## 11. Filter attributes and inspect exports
 
-These commands operate on the completed export. They do not push predicates into Logbrook and must not be used on an incomplete first page when you need full-window results.
+When equality on a top-level attribute is enough, filter on the server. The filter applies before paging, and the count covers the whole window:
+
+```sh
+query_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
+count_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
+```
+
+Both find the one matching demo event. The same `filter` JSON works on the HTTP count, histogram, facets and tail endpoints. Strings are case-sensitive, a number never matches a string, and missing or null attributes never match. Only literal top-level keys and `eq` are supported; see [attribute equality](API.md#attribute-equality) for limits and how numbers compare.
+
+Everything else runs on the finished export with `jq`, on your machine. Run it on the full export from section 10, not on a single page, when you need results for the whole window.
 
 ```sh
 # Exact request identifier: demo has 1 event.
@@ -297,7 +306,7 @@ printf '%s\n' 'id,event_time,service,level,message'
 jq -r '[.id, .event_time, .service, .level, .message] | @csv' query-export.ndjson
 ```
 
-The sample `durationMs` values are numbers. If producers use mixed types, normalize or check the attribute type before numeric comparisons. For a small bounded export, summarize slow requests per service on the client:
+The demo's `durationMs` values are numbers. If your producers send the same attribute with different types, check the type before comparing numbers. For a small export, you can also group on the client, here counting slow requests per service:
 
 ```sh
 jq -s 'map(select((.attributes.durationMs // 0) >= 1000))
@@ -305,11 +314,11 @@ jq -s 'map(select((.attributes.durationMs // 0) >= 1000))
   | map({service: .[0].service, slow_requests: length})' query-export.ndjson
 ```
 
-Demo result: `[{"service":"api","slow_requests":3}]`. `jq -s` loads the export into memory; server-side facets are the better fit for counts over large windows when the built-in dimensions suffice.
+Demo result: `[{"service":"api","slow_requests":3}]`. `jq -s` loads the whole export into memory; for large windows, use server-side facets when the built-in fields are enough.
 
 ## 12. Use the HTTP API directly
 
-Define a helper that URL-encodes every query parameter and shares the same fixed time window. Paths in these examples use the `QUERY_INDEX` set above.
+This helper sends a GET to the index set in `QUERY_INDEX`, with the fixed time window and every parameter URL-encoded:
 
 ```sh
 logs_get() {
@@ -333,11 +342,11 @@ logs_get /count --data-urlencode 'service=api' \
   --data-urlencode 'min_level=50' | jq .
 ```
 
-The HTTP parameter is `min_level`; the CLI option is `--min-level`. Every bounded HTTP query requires `from` and `to`; HTTP does not accept `since`. Search returns `{"events":[...],"next_cursor":null}` when no further page exists. Empty searches return an empty array; empty counts return `{"count":0}`.
+The HTTP parameter is `min_level`, where the CLI option is `--min-level`. Every HTTP search, count, facet and histogram request needs `from` and `to`; HTTP has no `since`. On the last page, `next_cursor` is null. A search with no matches returns an empty `events` array, and a count returns `{"count":0}`.
 
 ## 13. Discover services, hosts, loggers, sources, and levels
 
-Facets are currently an HTTP feature; the CLI has no `facets` subcommand.
+The CLI has no `facets` command, so these use HTTP.
 
 ```sh
 logs_get /facets | jq .
@@ -360,11 +369,11 @@ Unfiltered demo service facets:
 ]
 ```
 
-The response contains `services`, `loggers`, `hosts`, `levels`, and `sources`, each with up to 100 non-null values ranked by descending count. Level values are strings in this response, such as `"50"`. Optional null fields are omitted from their dimension, so not every dimension necessarily sums to the full event count. All filters apply before grouping: filtering to `service=api` also narrows the service facet itself.
+The response has `services`, `loggers`, `hosts`, `levels` and `sources`, each with up to 100 non-null values sorted by descending count. Level values are strings here, such as `"50"`. Events without an optional field are left out of that field's list, so a list does not always add up to the total. Filters apply before grouping: with `service=api`, the service facet itself only shows `api`.
 
 ## 14. Chart event volume over time
 
-Histograms are currently HTTP-only. Request five-minute buckets over the fixed hour:
+The CLI has no histogram command either. Request five-minute buckets over the fixed hour:
 
 ```sh
 logs_get /histogram --data-urlencode 'interval_ms=300000' | jq .
@@ -378,13 +387,13 @@ logs_get /histogram --data-urlencode 'interval_ms=300000' |
   jq '[.buckets[].count] | add // 0'
 ```
 
-Response shape: `{"buckets":[{"time":1791370000000,"count":3},...]}` (timestamp illustrative). `time` is the bucket's start in Unix milliseconds. Buckets are anchored to the exact requested `from`, appear in ascending order, and include only nonempty buckets. Fill missing buckets with zero in your chart if needed. The final bucket can be shorter than the requested interval.
+The response looks like `{"buckets":[{"time":1791370000000,"count":3},...]}`. `time` is the bucket start in Unix milliseconds, counted from the exact `from` you sent, and buckets come in ascending order. Empty buckets are left out, so fill them with zeros when charting. The last bucket can be shorter than the interval.
 
-There are at most 2,000 possible buckets per request. A one-day query with one-minute buckets fits (1,440); a seven-day query with one-minute buckets exceeds the limit. Use a larger interval, such as `900000` (15 minutes; 672 buckets over seven days), or split the window. Omitting `interval_ms` selects at least one minute and increases it as needed to fit the bucket limit.
+A request can cover at most 2,000 buckets. One day of one-minute buckets fits (1,440); seven days does not. Use a larger interval, such as `900000` (15 minutes, 672 buckets over seven days), or split the window. Without `interval_ms`, the server picks one minute, or a longer interval if one minute would exceed 2,000 buckets.
 
 ## 15. Watch new events with live tail
 
-Live tail is currently HTTP/SSE-only; the CLI has no `tail` subcommand. This command stays open until interrupted with Ctrl-C:
+The CLI has no `tail` command; live tail is a Server-Sent Events stream over HTTP. This command stays open until you press Ctrl-C:
 
 ```sh
 curl --fail-with-body --silent --show-error --no-buffer --get \
@@ -393,7 +402,7 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
   --data-urlencode 'service=api' --data-urlencode 'min_level=50'
 ```
 
-Without a resume header, tail starts at the current committed ingestion position; it does not replay the demo events already stored. In another terminal using the same URL, index, and ingestion token, submit an event:
+Without a resume header, tail only sends events ingested after it connects, not the demo events already stored. In another terminal with the same URL, index and ingestion token, send an event:
 
 ```sh
 jq -n '[{time: (now * 1000 | floor), level: 50, service: "api", msg: "live timeout demonstration"}]' |
@@ -403,9 +412,9 @@ jq -n '[{time: (now * 1000 | floor), level: 50, service: "api", msg: "live timeo
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-This adds a thirteenth event to the demo index. It falls outside the original fixed hour's upper bound, so those original-window counts remain unchanged. A later relative query may include it.
+This adds a thirteenth event to the demo index. Its time is after the fixed window's `to`, so the expected counts above don't change, though a later `--since` query can include it.
 
-The stream sends `log` frames containing a canonical event JSON object and an SSE `id`; `cursor` frames also carry an `id` and indicate the stream is caught up. Keepalive comments may appear. Save the last processed SSE ID from either frame type to resume:
+A `log` frame carries an event as JSON plus an SSE `id`. A `cursor` frame also has an `id` and means the stream has caught up. Keepalive comments can appear between frames. To resume later, save the SSE ID of the last frame of either type you processed:
 
 ```sh
 export LAST_TAIL_ID='<exact id from the SSE stream>'
@@ -416,11 +425,11 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
   --data-urlencode 'service=api' --data-urlencode 'min_level=50'
 ```
 
-Use the same index and filters. A named-index SSE ID includes the index prefix; use it intact. It differs from a search `next_cursor` and from the event's JSON `id`. Resume replays matching retained events after that ingestion position, then follows new events. Tail follows ingestion order, so a newly ingested event with an older event timestamp can still appear.
+Use the same index and filters, or the server returns `400`. The SSE ID is an opaque token that starts with the index name; send it unchanged. It is not a search `next_cursor` or the event's JSON `id`. On resume, the server replays matching events still retained after that point, then follows new ones. Tail follows ingestion order, so an event that arrives late with an older timestamp still shows up.
 
-Tail accepts the field filters but rejects `from`, `to`, `since`, `limit`, `cursor`, and `interval_ms`; do not use `logs_get` for it because that helper adds bounds. A `gap` or `error` frame terminates the stream. Reconcile retained history with search before reconnecting after a gap; repeated blind resume cannot recover expired data. `curl` does not automatically save SSE IDs or reconnect for you.
+Tail takes the field filters but rejects `from`, `to`, `since`, `limit`, `cursor` and `interval_ms`, which is why it doesn't use `logs_get`. A `gap` or `error` frame ends the stream. After a gap, search the retained history before reconnecting, because resuming again cannot recover expired events. `curl` doesn't save SSE IDs or reconnect for you.
 
-## Supported query surface and common corrections
+## What is supported, and common errors
 
 | Need | Supported approach |
 | --- | --- |
@@ -429,20 +438,21 @@ Tail accepts the field filters but rejects `from`, `to`, `since`, `limit`, `curs
 | Top services/hosts/loggers/levels/sources | HTTP `/logs/facets` |
 | Event counts per time bucket | HTTP `/logs/histogram` |
 | New events plus retained sequence replay | HTTP `/logs/tail` with optional `Last-Event-ID` |
-| Arbitrary attribute predicates, OR/NOT, regex, exact severity | Complete bounded export, then a client-side tool such as `jq` |
-| SQL, Lucene/KQL, joins, cross-index wildcard search | Not exposed by the current API/CLI |
+| Top-level attribute equality | `--filter` or HTTP `filter` on every query endpoint |
+| Nested attributes, ranges, OR/NOT, regex, exact severity | Complete bounded export, then a client-side tool such as `jq` |
+| SQL, Lucene/KQL, joins, cross-index wildcard search | Not supported |
 
 | Symptom | Check |
 | --- | --- |
 | `400` invalid/excessive time range | Use milliseconds, `from < to`, and a window within the configured maximum. |
-| `400` unknown query field | Use endpoint-specific parameters; only search accepts `limit/cursor`, only histogram accepts `interval_ms`. |
+| `400` unknown query field | Only search accepts `limit` and `cursor`, and only histogram accepts `interval_ms`. |
 | `401` | Use a configured read token; an admin or ingestion token cannot query. Check `LOGBROOK_TOKEN` overrides in the CLI. |
 | `403` | The token must allow both the index and every requested source. |
 | `404` | The index must already exist; reads do not create it. |
-| `413` or CLI 16 MiB response-limit error | Narrow filters/window or lower page size; configured server response limits also apply. |
-| `429` | Capacity is occupied; honor HTTP `Retry-After` and retry with backoff. The CLI does not automatically retry. |
+| `413` or CLI 16 MiB response-limit error | Narrow the filters or window, or lower the page size. The server's own response limit (8 MiB by default) also applies. |
+| `429` | The server is at capacity; wait for `Retry-After` and retry with backoff. The CLI does not retry on its own. |
 | `503` | Storage is unavailable or shutting down; inspect readiness and server diagnostics. |
 | `504` | Narrow the scan or inspect the server's query budget. Raising CLI `--timeout` does not raise the server deadline. |
-| Cursor expired / tail `gap` | Retention may expire the continuation point; tail gaps can also signal an output limit. Reconcile retained history. |
+| Cursor expired / tail `gap` | Retention removed the position the cursor pointed to, or (tail only) an event exceeded the output limit. Search the retained history and start again. |
 
-See the [CLI guide](CLI.md), [API reference](API.md), [OpenAPI contract](../src/openapi.json), and [operations guide](OPERATIONS.md) for configuration and limits. The inline demo creates synthetic data only; stop writing to the demo when finished. If you choose to remove it, `logbrook indexes delete "$QUERY_INDEX" --yes` requires a separate admin credential and permanently removes that index.
+See the [CLI guide](CLI.md), [API reference](API.md), [OpenAPI contract](../src/openapi.json) and [operations guide](OPERATIONS.md) for configuration and limits. To remove the demo index when you are done, run `logbrook indexes delete "$QUERY_INDEX" --yes` with an admin token; this permanently deletes it.

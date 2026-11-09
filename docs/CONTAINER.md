@@ -1,44 +1,56 @@
 # Container packaging
 
 The production image contains the Logbrook executable and its runtime libraries.
-Rust, compilers, build caches, and source files stay in build stages. The final
-runtime uses a digest-pinned `gcr.io/distroless/cc-debian13:nonroot` multiarchitecture
-image, supplying glibc, the C++ runtime needed by bundled DuckDB, and CA roots.
-It contains no shell or package manager. The Logbrook MIT license is included at
-`/usr/share/licenses/logbrook/LICENSE`. Dependency licenses and attribution,
-including Apache Arrow notices and DuckDB's bundled native components, are in
-`/usr/share/licenses/logbrook/THIRD_PARTY_NOTICES.txt`. The build checks its
-lockfile fingerprint, and CI verifies the complete generated contents. See
-[license maintenance](../licenses/README.md) when updating dependencies.
-Debian 13 is the currently maintained
-Distroless series; see the [upstream image list](https://github.com/GoogleContainerTools/distroless#what-images-are-available)
-and [support policy](https://github.com/GoogleContainerTools/distroless/blob/main/SUPPORT_POLICY.md).
+Rust, compilers, build caches, and source files stay in the build stages. The
+runtime stage is a digest-pinned, multi-architecture
+`gcr.io/distroless/cc-debian13:nonroot` image, which supplies glibc, the C++
+runtime that bundled DuckDB needs, and CA roots. It has no shell or package
+manager. See the Distroless
+[image list](https://github.com/GoogleContainerTools/distroless#what-images-are-available)
+and [support policy](https://github.com/GoogleContainerTools/distroless/blob/main/SUPPORT_POLICY.md)
+when choosing a new base.
 
-The final stage depends on a verification stage that strips unneeded ELF symbols,
-executes the version command, and checks shared-library resolution with build
-stage tools. Stripping preserves runtime unwind information and does not change
-Rust optimization, panic handling, or DuckDB compilation. Build checks are not a
-substitute for the packaged runtime smoke test below.
+The Logbrook MIT license is at `/usr/share/licenses/logbrook/LICENSE`. Dependency
+licenses and attribution, including Apache Arrow notices and DuckDB's bundled
+native components, are in `/usr/share/licenses/logbrook/THIRD_PARTY_NOTICES.txt`.
+The build fails if that file's lockfile fingerprint doesn't match `Cargo.lock`,
+and CI checks its full contents. See [license maintenance](../licenses/README.md)
+when updating dependencies.
 
-The Dockerfile's default version label tracks the application version in
-`Cargo.toml`. The release helper updates both, including for ordinary local and
-Compose builds. CI supplies the same version explicitly as a build argument.
+Before the runtime stage, a verification stage strips unneeded ELF symbols, runs
+`logbrook --version`, and checks that every shared library resolves. These checks
+don't replace the smoke test under [local verification](#local-verification).
 
-When the application build step runs, it refreshes both Rust crate entry-point
-timestamps before invoking Cargo. A shared target cache can otherwise consider
-newly copied sources older than a prior build's dependency timestamps and reuse
-an outdated application. Native dependency artifacts remain cached; changes to
-the executable or API specification rebuild the application.
+The Dockerfile's default `VERSION` build argument, used for the image's version
+label, matches the version in `Cargo.toml`, so local and Compose builds carry the
+right label. The release helper updates both, and CI passes the version
+explicitly.
 
-The process runs directly as UID/GID `10001:10001`; Docker forwards SIGTERM to it.
-`/data` is writable and owned by that UID, including fresh named volumes. Bind
-mounts must be provisioned with matching ownership. The healthcheck invokes
-`logbrook healthcheck` directly and needs no shell. Compose sets a read-only root,
-a 256 MiB `/tmp` tmpfs, drops all capabilities, disables privilege escalation, and
-provides 35 seconds for shutdown. Compose sets no CPU or memory limit; the
-configured DuckDB memory budget still applies and is not a total process cap.
-The service requires only `/data` and `/tmp`
-to be writable. Avoid mounting secrets or configuration into the build context.
+## Runtime
+
+The process runs directly as UID/GID `10001:10001`, and Docker sends SIGTERM to
+it. `/data` is writable and owned by that UID, including on a fresh named volume.
+Bind mounts need the same ownership. The healthcheck runs `logbrook healthcheck`
+directly, without a shell.
+
+The Compose file sets a read-only root, a 256 MiB `/tmp` tmpfs, drops all
+capabilities, disables privilege escalation, and allows 35 seconds for shutdown.
+Only `/data` and `/tmp` need to be writable. Compose sets no CPU or memory limit.
+The configured DuckDB memory budget still applies, but it doesn't cap the whole
+process. Keep secrets and configuration out of the build context.
+
+## Optional Forward listener
+
+The Forward receiver stays off until a configuration file enables it. The
+[Forward Compose example](../examples/forward/compose.yaml) mounts that file
+read-only, binds the listener on `0.0.0.0:24224` inside the container with
+`trusted_network = true`, and publishes it only on the host's `127.0.0.1:24524`.
+HTTP keeps its own port. The example keeps UID 10001, the read-only root, the
+`/tmp` tmpfs, dropped capabilities, and the 35-second stop deadline. Other
+containers on the same network can reach a trusted listener, so use
+authenticated listeners across trust boundaries. See
+[Forward configuration](FORWARD.md) for TLS, secret mounts, Unix sockets, and
+application logging options.
 
 ## Local verification
 
@@ -49,41 +61,39 @@ cargo xtask container-smoke --image logbrook:local
 cargo xtask check-cli --image logbrook:local
 ```
 
-The smoke test creates disposable containers and a fresh volume, verifies API
-authentication, API routing, ingestion/search, the executable
-healthcheck, offline Parquet archival, search after restart, and graceful SIGTERM
-shutdown under the Compose security settings. It reads persisted files with
-`docker cp` rather than relying on runtime inspection utilities. All owned
-containers and volumes are removed even on failure.
+`container-smoke` runs disposable containers on a fresh volume with the Compose
+security settings. It checks API authentication and routing, ingestion and
+search, the healthcheck, offline Parquet archival, search after a restart, and
+shutdown on SIGTERM. It removes its containers and volumes even when a check
+fails.
 
-`cargo xtask image-inspect` reports uncompressed local image bytes and executable bytes,
-checks the runtime user, and verifies both the project license and dependency notices.
-The 110 MiB image budget allows architecture differences and modest dependency
-growth while keeping the runtime small.
-Compressed registry/download size differs from this local image measurement.
+`image-inspect` reports the uncompressed local image size and the executable
+size, checks the runtime user, and checks that the image contains the project
+license and the dependency notices. The 110 MiB budget leaves room for
+differences between architectures and some dependency growth. The compressed
+download from a registry is a different size.
 
 ## CI artifacts
 
-CI builds and smoke-tests native `linux/amd64` and `linux/arm64` images on matching
-GitHub runners. A Docker-container BuildKit builder exports an OCI archive with
-SBOM and maximum provenance attestations, then loads the same cached build into
-Docker for smoke tests. The OCI archive is retained for seven days as a CI
-artifact; normal verification does not publish to a registry. The separate
-[release workflow](RELEASING.md) creates the version tag, invokes the same checks
-for its exact commit, and publishes the verified OCI artifacts to GHCR before
-creating a GitHub release. The OCI exporter retains attestations,
-whereas loading into the classic Docker image store can discard them; see
-[Docker's attestation documentation](https://docs.docker.com/build/metadata/attestations/).
+CI builds and smoke-tests native `linux/amd64` and `linux/arm64` images on
+matching GitHub runners. Each build exports an OCI archive with an SBOM and
+maximum provenance attestations, and loads the same build into Docker for the
+smoke tests. CI keeps the OCI archive as an artifact for seven days and doesn't
+publish to a registry. The [release workflow](RELEASING.md) runs the same checks
+for the release commit and publishes those OCI archives to GHCR. The OCI archive
+keeps the attestations; loading an image into Docker's classic image store can
+drop them (see
+[Docker's attestation documentation](https://docs.docker.com/build/metadata/attestations/)).
 
-Load probes use `cargo xtask container-probe CONTAINER [COUNTERS]` to read only four fixed target cgroup
-counters (`memory.current`, `memory.peak`, `memory.events`, `cpu.stat`). A disposable
-digest-pinned official Debian observer joins the target PID namespace as UID
-10001 with no network, capabilities, or privilege escalation and a read-only
-root. It reads `/proc/1/root/sys/fs/cgroup`; it does not mount host filesystems
-or add utilities to the production image. Permission failures propagate without
-privilege retries. On hosts that deny this access, report the missing cgroup
-counters and use Docker Engine statistics with their differing semantics.
+Load tests use `cargo xtask container-probe CONTAINER [COUNTERS]` to read four
+cgroup counters of the target container: `memory.current`, `memory.peak`,
+`memory.events`, and `cpu.stat`. The probe starts a disposable, digest-pinned
+Debian container in the target's PID namespace, as UID 10001 with no network, no
+capabilities, and a read-only root, and reads `/proc/1/root/sys/fs/cgroup`. It
+doesn't mount host filesystems or add tools to the production image. If the host
+denies that access, the probe fails; report the missing counters and use Docker
+Engine statistics instead, which measure differently.
 
-Base and toolchain pins need regular reviewed updates. Digest pinning makes a
-build's inputs explicit; it does not apply future upstream security fixes
-automatically. Packaging CI verifies both architecture variants after an update.
+Digest pins don't pick up upstream security fixes, so review and update the base
+image and toolchain pins regularly. CI verifies both architectures after an
+update.
