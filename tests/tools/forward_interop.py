@@ -31,6 +31,11 @@ import urllib.request
 FLUENTD_IMAGE = "fluent/fluentd@sha256:188ca130e9998adb2587cfa09416336b6d3bc309153b4564c48f9023fda12124"
 FLUENTBIT_IMAGE = "fluent/fluent-bit@sha256:2740f387f6e68fab66d28e4fa6a853387b9cab6ffb4cb78958f69bba4eb0e7b4"
 LABEL = "logbrook.forward-interop"
+# TLS name of the secure listener: its certificate's DNS name and its shared-key server hostname.
+# Fluentd verifies an IP-addressed server against its `name`; without one it fails on a nil name.
+TLS_NAME = "logbrook-interop"
+# Seconds between the Docker case's stdout and stderr lines; see `producers`.
+DOCKER_STREAM_GAP_SECONDS = 3
 
 
 def hostname(value: str) -> str:
@@ -266,9 +271,9 @@ class Harness:
     def certificate(self) -> None:
         try:
             ipaddress.ip_address(self.args.host)
-            san = f"IP:{self.args.host}"
+            san = f"DNS:{TLS_NAME},IP:{self.args.host}"
         except ValueError:
-            san = f"DNS:{self.args.host}"
+            san = f"DNS:{TLS_NAME},DNS:{self.args.host}"
         configuration = self.private / "openssl.cnf"
         self.write(configuration, f"""[req]
 distinguished_name=dn
@@ -319,7 +324,7 @@ trusted_network=true
 name="secure"
 bind={quoted(f'0.0.0.0:{self.secure_port}')}
 security="shared_key"
-server_hostname="logbrook-interop"
+server_hostname={quoted(TLS_NAME)}
 [forward.listeners.shared_key]
 file={quoted(self.private / 'shared-key')}
 [forward.listeners.users.fixture]
@@ -360,7 +365,7 @@ normalizer="generic"
             port = self.secure_port if secure else self.forward_port
             if not secure and self.args.negative_control == "fluentd":
                 port = self.proxy.port
-            user = f"username fixture\n    password {self.password}" if secure else ""
+            user = f"name {TLS_NAME}\n    username fixture\n    password {self.password}" if secure else ""
             security = f"""<security>
     self_hostname fluentd-interop
     shared_key {self.shared_key}
@@ -572,7 +577,12 @@ normalizer="generic"
     def producers(self) -> None:
         stdout = json.dumps({"level": 30, "msg": self.markers["docker_stdout"]})
         stderr = json.dumps({"level": 50, "msg": self.markers["docker_stderr"]})
-        script = f"printf '%s\\n' {shlex.quote(stdout)}; printf '%s\\n' {shlex.quote(stderr)} >&2; sleep 2"
+        # Docker 28's fluentd driver (fluent-logger-golang 1.9.0) reads ACKs for both streams on one
+        # connection without a lock. Lines on stdout and stderr at the same moment can swap ACKs,
+        # and the driver then resends both in a loop with no backoff. Spacing the lines keeps
+        # one envelope in flight at a time.
+        script = (f"printf '%s\\n' {shlex.quote(stdout)}; sleep {DOCKER_STREAM_GAP_SECONDS}; "
+                  f"printf '%s\\n' {shlex.quote(stderr)} >&2; sleep 2")
         host = f"[{self.args.host}]" if ":" in self.args.host else self.args.host
         def driver():
             name = self.container("docker", self.args.fluentd_image, ["-c", script], detached=False, extra=[

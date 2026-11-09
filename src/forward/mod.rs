@@ -500,6 +500,7 @@ fn log_session_error(listener: &str, error: &Error) {
         tracing::warn!(
             listener = %listener,
             reason_code = %diagnostic_reason(error),
+            error = %error.message,
             diagnostic_id,
             "Forward session closed"
         );

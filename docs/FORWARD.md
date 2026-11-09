@@ -76,6 +76,13 @@ against your Docker Engine version and send a test event before moving real
 traffic. `fluentd-write-timeout` doesn't limit the wait for an ACK. The
 `cache-*` options keep a local copy for `docker logs` only.
 
+Keep `fluentd-async` on when you set `fluentd-request-ack`. Without it, Docker
+Engine 28.0.4 (whose driver uses fluent-logger-golang 1.9.0) sends stdout and
+stderr lines from separate goroutines over one connection and can mix up their
+ACKs. The driver then resends both lines in a loop without backoff, which
+stores duplicates and overloads the receiver. In async mode the driver sends one
+envelope at a time.
+
 ## Delivery and compatibility
 
 Supported modes are Message, Forward, PackedForward (as `bin` or `str`) and
@@ -311,7 +318,8 @@ then.
 `/metrics` exports `logbrook_forward_*` counters and gauges, and a
 `logbrook_forward_duration_seconds` histogram with a `stage` label
 (`preparation`, `decode`, `admission`, `commit`, `ack`). Closed sessions are
-logged with the listener name, a reason code and a diagnostic ID: the first
-eight, then each power of two. Logs never include records, chunk tokens or
+logged with the listener name, a reason code, the error message (such as
+which budget was full) and a diagnostic ID: the first eight, then each power of
+two. Logs never include records, chunk tokens or
 credentials. See [operations](OPERATIONS.md) for retention, storage and
 backups.
