@@ -30,8 +30,12 @@ const { item } = Astro.props;
 const deferred = Boolean(item.deferred && item.childrenHref);
 const hasChildren = item.children.length > 0 || deferred;
 // `expanded` ⟺ ancestor of the active node; `active` ⟺ the current node. Both
-// mean "on the active trail" for header emphasis, and either opens the group.
+// mean "on the active trail" for header emphasis.
 const onActiveTrail = Boolean(item.expanded || item.active);
+// Local change from the registry component: every group starts open so the
+// whole API is visible in the rail. A deferred group has no rows until it
+// loads, so it still opens only on the active trail. Keep this on upgrades.
+const open = !deferred || onActiveTrail;
 ---
 
 {
@@ -39,7 +43,7 @@ const onActiveTrail = Boolean(item.expanded || item.active);
     <details
       data-nb-nav-group={item.coordinate}
       data-nb-nav-src={deferred ? withBase(item.childrenHref!, import.meta.env.BASE_URL) : undefined}
-      open={onActiveTrail || undefined}
+      open={open || undefined}
     >
       <SidebarGroupHeader label={item.label} hasActive={onActiveTrail} deprecated={item.deprecated} />
       <ul>
