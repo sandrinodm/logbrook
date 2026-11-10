@@ -1,0 +1,59 @@
+---
+title: "Put the UI behind a reverse proxy"
+description: "Authenticate users and terminate TLS in front of the UI, with Traefik forward auth as a worked example."
+sidebar:
+  order: 6
+---
+
+The UI trusts everyone who reaches it. To make it available to other people, put a reverse proxy in front that authenticates them, and make that proxy the only way in. The proxy decides who may use the UI; the UI then acts with its read token (and admin token, if set).
+
+## What the proxy has to do
+
+- **Authenticate users** before forwarding any request, including static files and `/api/lb/...`.
+- **Be the only path in.** Don't publish the UI's port on a public interface. Keep it on loopback or on a private Docker network that the proxy shares.
+- **Terminate TLS.** The UI serves plain HTTP. Tokens never reach the browser, but your users' sessions and the log data themselves do.
+- **Not buffer the live tail.** The tail is a long-lived server-sent events stream at `/api/lb/indexes/<index>/logs/tail`. A proxy that collects the response before sending it holds events back or breaks the stream. The UI sends `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no` on that stream, which nginx honours; for other proxies, turn response buffering off for the route.
+- **Pass the host name on.** Set `ALLOWED_HOSTS` on the UI to the name the proxy forwards, normally the public host name.
+
+<Aside type="caution" title="A proxy does not stop cross-site requests">
+Authenticating users doesn't protect against a page on another site making their browser call the UI. That is why the server functions that create and delete indexes keep a same-origin check and answer `403` to cross-site requests. Keep the admin token unset unless you need index management.
+</Aside>
+
+## Example: Traefik with forward auth
+
+This is an example, not a complete deployment. It assumes Traefik v3 already runs on the same Docker network with a `websecure` entry point and a certificate resolver, and that an authentication service answers Traefik's forward-auth requests. Replace `logs.example.com`, `letsencrypt` and `http://auth:4181` with your own.
+
+```yaml title="compose.yaml (the logbrook-ui service, fragment)"
+services:
+  logbrook-ui:
+    # No "ports" entry: Traefik reaches the UI over the Docker network.
+    # Put it on the network Traefik uses (not shown).
+    environment:
+      ALLOWED_HOSTS: logs.example.com
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.logbrook-ui.rule: Host(`logs.example.com`)
+      traefik.http.routers.logbrook-ui.entrypoints: websecure
+      traefik.http.routers.logbrook-ui.tls.certresolver: letsencrypt
+      traefik.http.routers.logbrook-ui.middlewares: logbrook-auth
+      traefik.http.services.logbrook-ui.loadbalancer.server.port: "3000"
+      # Every request is sent to this address first. A 2xx answer lets it through;
+      # any other answer is returned to the client instead.
+      traefik.http.middlewares.logbrook-auth.forwardauth.address: http://auth:4181
+```
+
+Notes:
+
+- The router's middleware list contains only the forward-auth middleware. Don't add Traefik's buffering middleware to this router: it would buffer the tail.
+- Traefik forwards the original `Host` header by default, so `ALLOWED_HOSTS` is the public name.
+- The Compose service in [Run the UI](/web-ui/deploy/#add-the-ui-to-your-compose-deployment) publishes the UI on `127.0.0.1:3000`. That is fine for trying things locally; behind Traefik, remove its `ports` entry so the proxy is the only way in.
+- Whatever your forward-auth service is, test that an unauthenticated request to the UI and to `/api/lb/indexes` on the public name is refused.
+
+## Health checks and monitoring
+
+Point the container's health check at the UI directly, not through the proxy: `/healthz` answers `200` without calling Logbrook. See [Run the UI](/web-ui/deploy/#health-check).
+
+## Related
+
+- [Run in production](/operate/production/) covers the server side: a TLS-terminating proxy for the API and keeping port 3100 private.
+- [Credentials and roles](/configure/credentials/) explains which tokens the UI should hold. Prefer a read token scoped to the sources your users should see.

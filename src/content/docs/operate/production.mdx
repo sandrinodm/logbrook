@@ -71,6 +71,8 @@ If you change the port inside the container, set `LOGBROOK_BIND` to match, becau
 
 Logbrook does not terminate TLS for the HTTP API, and tokens travel in the `Authorization` header. For remote access, put a TLS-terminating reverse proxy in front and keep the container port on loopback or a private network.
 
+If you also run the [web UI](/web-ui/), it needs its own authenticating proxy: the UI has no login of its own. See [Run the UI](/web-ui/deploy/).
+
 ## Sizing
 
 There are no published sizing figures, so measure with your own workload. Account for the following.
@@ -89,6 +91,7 @@ There are no published sizing figures, so measure with your own workload. Accoun
 - [ ] Container runs read-only, with dropped capabilities and a 35 second stop timeout.
 - [ ] `/data` is on a persistent volume with a single owner process, owned by UID `10001`.
 - [ ] Port 3100 is not exposed directly; a TLS-terminating proxy handles remote access.
+- [ ] If you run the [web UI](/web-ui/), it is behind an authenticating reverse proxy, or bound to loopback.
 - [ ] Retention, archive age and disk target are set for each index. See [indexes and retention](/configure/indexes-and-retention/).
 - [ ] Prometheus scrapes `/metrics` and you alert on free disk. See [monitoring](/operate/monitoring/).
 - [ ] You have taken and restored a backup at least once. See [backup and upgrade](/operate/backup-and-upgrade/).

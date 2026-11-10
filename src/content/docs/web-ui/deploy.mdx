@@ -1,0 +1,180 @@
+---
+title: "Run the UI"
+description: "Run the published UI image next to Logbrook with Compose or Docker, and configure its tokens, host checks and hardening."
+sidebar:
+  order: 5
+---
+
+Each release publishes the UI as a container image, `ghcr.io/sandrinodm/logbrook-ui`, next to the server image `ghcr.io/sandrinodm/logbrook` and with the same version. Run the UI image of the same release as your server. This page covers running it, every environment variable, the host checks that protect it, and how it shuts down. To expose it to other machines, also read [Put the UI behind a reverse proxy](/web-ui/reverse-proxy/).
+
+<Aside type="caution" title="No built-in authentication">
+Whoever can reach the UI gets the access of its tokens. Publish its port on loopback only, and don't make it reachable from a network without an authenticating proxy in front.
+</Aside>
+
+## Before you start
+
+You need a running Logbrook server and a **read token** for it. The [credentials](/configure/credentials/) page explains the roles. For index management, also set an **admin token** on the server. The UI never needs an ingestion token.
+
+The image is built for `linux/amd64` and `linux/arm64`, like the server's; Docker picks the right one for your host.
+
+## Add the UI to your Compose deployment
+
+If you run the server with the [Compose deployment](/get-started/docker-compose/), add a `logbrook-ui` service to the same `compose.yaml`. It reaches the server over the Compose network and reuses the read token from `.env`.
+
+<Steps>
+  <Step title="Add the service">
+    Add this under `services:`, next to `logbrook`:
+
+    ```yaml title="compose.yaml (add to services)"
+      logbrook-ui:
+        image: ${LOGBROOK_UI_IMAGE:-ghcr.io/sandrinodm/logbrook-ui:0.3.0}
+        ports:
+          - "127.0.0.1:3000:3000"
+        environment:
+          LOGBROOK_URL: http://logbrook:3100
+          LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set the read token the server uses}
+          # LOGBROOK_ADMIN_TOKEN: ${LOGBROOK_ADMIN_TOKEN:?Set the admin token the server uses}
+          ALLOWED_HOSTS: ${UI_ALLOWED_HOSTS:-localhost}
+        depends_on:
+          logbrook:
+            condition: service_healthy
+        read_only: true
+        cap_drop:
+          - ALL
+        security_opt:
+          - no-new-privileges:true
+        restart: unless-stopped
+    ```
+
+    Use the same version as the server's `image`. To run another release or a digest, set `LOGBROOK_UI_IMAGE` in `.env`.
+  </Step>
+  <Step title="Start it">
+    ```sh
+    export COMPOSE_PROJECT_NAME=logbrook
+    docker compose config --quiet
+    docker compose up -d --wait --wait-timeout 120
+    ```
+
+    `--wait` returns once both health checks pass. Open [http://localhost:3000](http://localhost:3000).
+  </Step>
+</Steps>
+
+To let the UI create and delete indexes, give the server an admin token as the [Compose guide](/get-started/docker-compose/#change-the-configuration) describes, uncomment the `LOGBROOK_ADMIN_TOKEN` line of the `logbrook-ui` service too, and recreate both with `docker compose up -d --wait`. Without it the Indexes view is read-only. Keep the line commented out while there is no admin token: an empty token is invalid.
+
+The port stays on the host's loopback. When a reverse proxy on the same Docker network fronts the UI, remove the `ports` entry so the proxy is the only way in, and set `UI_ALLOWED_HOSTS` to the public host name.
+
+## Run with Docker
+
+To run the UI on its own, point `LOGBROOK_URL` at the server as the container sees it. This joins the network of the Compose deployment above, whose project is named `logbrook`:
+
+```sh
+docker run --detach --name logbrook-ui \
+  --network logbrook_default \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --publish 127.0.0.1:3000:3000 \
+  --env LOGBROOK_URL=http://logbrook:3100 \
+  --env LOGBROOK_READ_TOKEN \
+  --env ALLOWED_HOSTS=localhost \
+  ghcr.io/sandrinodm/logbrook-ui:0.3.0
+```
+
+`--env LOGBROOK_READ_TOKEN` without a value passes the variable from your shell, so the token stays out of the command line; load it first, for example with `set -a; . ./.env; set +a`. Add `--env LOGBROOK_ADMIN_TOKEN` to enable index management. The container doesn't read a `.env` file itself: pass every variable with `--env` or `--env-file`.
+
+For a reproducible deployment, pull by digest instead of by tag:
+
+```sh
+docker pull ghcr.io/sandrinodm/logbrook-ui:0.3.0
+docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/sandrinodm/logbrook-ui:0.3.0
+```
+
+Then run `ghcr.io/sandrinodm/logbrook-ui@sha256:<digest>`.
+
+## Environment variables
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LOGBROOK_URL` | `http://127.0.0.1:3100` | Base URL of the Logbrook server, as the UI's server reaches it. It must be an absolute `http` or `https` URL; trailing slashes are removed. |
+| `LOGBROOK_READ_TOKEN` | none, **required** | A Logbrook read token, sent for every read. The UI refuses to start without it. |
+| `LOGBROOK_ADMIN_TOKEN` | none | A Logbrook admin token, different from the read token. Enables creating and deleting indexes and the full index list. Without it those controls are hidden. |
+| `PORT` | `3000` | Port the server listens on. The image sets `3000`. |
+| `HOST` | `127.0.0.1` | Address the server listens on. `NITRO_HOST`, if set, takes precedence. The image sets `0.0.0.0`. |
+| `ALLOWED_HOSTS` | none | Comma-separated host names the server answers to, ports ignored. Any other `Host` header gets `421`. See [Host checks](#host-checks). |
+
+A variable that is empty or only whitespace counts as not set.
+
+### Tokens
+
+- The read token is required. The UI uses it for every read, including live tail and metrics.
+- The admin token is optional and enables index management. It is used only by server-side functions and never reaches the browser.
+- Each token must be 16 to 512 visible ASCII characters with no whitespace, which is what Logbrook accepts.
+- The two tokens must differ.
+
+A badly shaped token, the same value for both, or an invalid `LOGBROOK_URL` or `ALLOWED_HOSTS` stops the UI at start-up with a message that names the variable and never prints a token.
+
+When it starts, the UI also tries both tokens against Logbrook once and logs a warning (it does not stop) if Logbrook is unreachable, rejects a token, or if the read and admin tokens look swapped. Logbrook may simply start later than the UI. If Logbrook rejects the read token while the UI runs, the pages show "the server's Logbrook token was rejected"; fix `LOGBROOK_READ_TOKEN` and restart the UI.
+
+## Listen address
+
+Outside a container the UI listens on `127.0.0.1` unless `HOST` says otherwise, so only the machine it runs on can reach it. Inside a container that address is unreachable from the host, so the image sets `HOST=0.0.0.0`. What is reachable is then decided by how you publish the port: `127.0.0.1:3000:3000` keeps it on the host's loopback, and a proxy on the same Docker network can reach it without any published port.
+
+## Host checks
+
+An app on loopback with no authentication can be attacked by a web page whose domain name resolves to `127.0.0.1` (DNS rebinding). To stop that, the UI checks the `Host` header of every request, including static files, before anything else runs. A name that isn't allowed gets `421 Misdirected Request` with a short plain-text message, and no call to Logbrook is made.
+
+- With `ALLOWED_HOSTS` set, those names are allowed.
+- Without it, a server bound to a loopback address allows only `localhost`, `127.0.0.1` and `[::1]`.
+- Without it, a server bound to any other address, such as the container, allows any host and logs a warning at start-up asking you to set `ALLOWED_HOSTS`.
+- `localhost`, `127.0.0.1` and `[::1]` are always allowed. A page on another origin can't make a browser send those, and the container health check relies on them.
+
+Set `ALLOWED_HOSTS` to the name your browser uses. Entries are plain host names or IP addresses without scheme, port, path or wildcard, for example `ALLOWED_HOSTS=logs.example.com,logs.internal`. Behind a reverse proxy that doesn't pass the original `Host` header on, set it to the name the proxy sends.
+
+## Health check
+
+`GET /healthz` returns `200` with the body `ok` whenever the process is up. It doesn't call Logbrook, so a Logbrook that is down or a token it rejects never marks the UI unhealthy; those show up in the pages and in the start-up log. The image's health check calls it every 30 seconds with a 5 second timeout, a 10 second start period and 3 retries.
+
+## Shutdown
+
+On `SIGTERM` or `SIGINT` the UI stops accepting connections and ends the open live-tail streams, then exits as soon as the other requests finish, about a second after the signal. Browsers reconnect their tails with the last event ID they saw. Nitro's 5 second grace period (`SERVER_SHUTDOWN_TIMEOUT`) is only the upper bound. The image sets `STOPSIGNAL SIGTERM`, so the default `docker stop` timeout is enough.
+
+## What's in the image
+
+The image runs on a distroless Node 26 base with no shell or package manager, with base images pinned by digest, and carries an SBOM and build provenance.
+
+- It runs as the non-root user `65532`.
+- It holds only the build output, owned by root, so the process can't change its own code.
+- It writes nothing to disk, so a read-only root file system works.
+- The examples above also drop all capabilities and set `no-new-privileges`.
+
+## Troubleshooting
+
+| Symptom | Cause |
+| --- | --- |
+| The container exits at start-up naming a variable | A missing or badly shaped value. The message names the variable and the rule. |
+| Every page answers `421` | The `Host` header isn't in `ALLOWED_HOSTS`. Add the name your browser or proxy uses. |
+| "The server's Logbrook token was rejected" | Logbrook returned `401` for `LOGBROOK_READ_TOKEN`. Fix the token and restart the UI. |
+| The pages load but show errors from Logbrook | The UI can't reach `LOGBROOK_URL` (the proxy answers `502`), or the server is down. Check that the UI container is on the server's network and that the address resolves there. |
+| Indexes are read-only | No `LOGBROOK_ADMIN_TOKEN` is set on the UI. |
+| The tail stalls behind a proxy | The proxy buffers the stream. See [Put the UI behind a reverse proxy](/web-ui/reverse-proxy/). |
+
+## Build from source
+
+The published image covers every release. To run an unreleased commit, build the image from a checkout and set `LOGBROOK_UI_IMAGE=logbrook-ui:local` in `.env`:
+
+```sh
+git clone https://github.com/sandrinodm/logbrook.git
+cd logbrook/ui
+docker build --tag logbrook-ui:local --build-arg VCS_REF="$(git rev-parse HEAD)" .
+```
+
+The build context is an allowlist in `ui/.dockerignore`; a new build input must be allowed there.
+
+Without Docker, you need Node 26 or newer (`engines.node` in `ui/package.json`) and pnpm 12.1.0:
+
+```sh
+cd ui
+pnpm install
+pnpm build
+LOGBROOK_URL=http://127.0.0.1:3100 LOGBROOK_READ_TOKEN=<read token> pnpm start
+```
+
+`pnpm start` runs `node .output/server/index.mjs`, which needs nothing else on disk, and doesn't read a `.env` file; only the development server, `pnpm dev`, does.

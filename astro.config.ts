@@ -29,6 +29,7 @@ const nimbusConfig = defineNimbusConfig({
       { label: "Concepts", autogenerate: { directory: "concepts" } },
       { label: "Send logs", autogenerate: { directory: "send-logs" } },
       { label: "Query logs", autogenerate: { directory: "query" } },
+      { label: "Web UI", autogenerate: { directory: "web-ui" } },
       { label: "Configure", autogenerate: { directory: "configure" } },
       { label: "Operate", autogenerate: { directory: "operate" } },
       { label: "Reference", autogenerate: { directory: "reference" } },
