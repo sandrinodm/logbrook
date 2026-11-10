@@ -121,6 +121,7 @@ fn normalization_options(
         newest_time: received_at.saturating_add(destination.config.max_future_skew_ms),
         profile: route.normalizer,
         json_profile: route.json_profile,
+        application_attributes: route.application_attributes,
         received_at,
         zero_time_to_receipt: config.zero_time_to_receipt,
         service,

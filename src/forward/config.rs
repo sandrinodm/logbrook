@@ -1,5 +1,5 @@
 //! Typed receiver configuration. Secrets are references and never implement Debug.
-pub use super::normalize::{JsonProfile, NormalizationProfile};
+pub use super::normalize::{ApplicationAttributes, JsonProfile, NormalizationProfile};
 use super::{
     FRAME_PEAK_MULTIPLIER, READ_SCRATCH_BYTES, UNIX_MODE_ALLOWED_BITS, UNIX_MODE_REQUIRED_BITS,
 };
@@ -360,6 +360,9 @@ pub struct RouteConfig {
     pub normalizer: NormalizationProfile,
     /// JSON profile: `text`, `pino`, or `json_auto`.
     pub json_profile: JsonProfile,
+    /// Where application fields are stored: `nested` under `attributes.application`, or
+    /// `top_level` directly under `attributes`.
+    pub application_attributes: ApplicationAttributes,
     /// Service label to store. Takes precedence over `service_from`.
     pub service: Option<String>,
     /// Derives the service from the tag, currently only `tag_suffix`.
@@ -1169,6 +1172,17 @@ mod hostname_tests {
         .unwrap();
         assert_eq!(route.normalizer, NormalizationProfile::Docker);
         assert_eq!(route.json_profile, JsonProfile::Pino);
+        assert_eq!(route.application_attributes, ApplicationAttributes::Nested);
+
+        let route: RouteConfig = toml::from_str(r#"application_attributes = "nested""#).unwrap();
+        assert_eq!(route.application_attributes, ApplicationAttributes::Nested);
+
+        let route: RouteConfig = toml::from_str(r#"application_attributes = "top_level""#).unwrap();
+        assert_eq!(
+            route.application_attributes,
+            ApplicationAttributes::TopLevel
+        );
+        assert!(toml::from_str::<RouteConfig>(r#"application_attributes = "bogus""#).is_err());
 
         assert!(toml::from_str::<RouteConfig>(r#"normalizer = "unknown""#).is_err());
         assert!(toml::from_str::<RouteConfig>(r#"json_profile = "unknown""#).is_err());

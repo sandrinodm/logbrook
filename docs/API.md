@@ -192,7 +192,7 @@ The encoded filter also counts toward the 32,768-byte request target limit, and 
 
 Omitting `filter` is the same as `{"attributes":[]}`. A condition repeated with the same value counts once (after the 16-condition check), and two different values for one key are rejected. Empty or malformed JSON, `{}`, unknown or repeated members, a repeated `filter` parameter and operators other than `eq` return `400`, for example `{"error":"filter.attributes[1].op: only eq is supported"}`.
 
-Only top-level attributes can be matched. A custom field sent at the top level of an ingested event, such as `runId`, becomes `attributes.runId` and can be filtered. An input `attributes` object stays at `attributes.attributes`, and events received over Fluent Forward keep their application fields under `attributes.application`. Equality filters cannot reach fields nested like that.
+Only top-level attributes can be matched. A custom field sent at the top level of an ingested event, such as `runId`, becomes `attributes.runId` and can be filtered. An input `attributes` object stays at `attributes.attributes`, and by default events received over Fluent Forward keep their application fields under `attributes.application`. Equality filters cannot reach fields nested like that. To filter on those fields, set [`application_attributes = "top_level"`](FORWARD.md#application-attributes) on the Forward route. It applies to events received after the change.
 
 ## Counts, facets, and histograms
 

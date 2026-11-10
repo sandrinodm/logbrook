@@ -297,6 +297,11 @@ enabled = false
 # index = "payments"
 # normalizer = "docker"
 # json_profile = "json_auto"
+# Optional, and not part of the Docker example: when you uncomment the route,
+# leave the next line commented to keep the default, "nested". Uncomment it to
+# store application fields at the top level so attribute filters can match
+# them. See docs/FORWARD.md.
+# application_attributes = "top_level"
 # service_from = "tag_suffix"
 # host = "application-host"
 # compose_service_label = "com.docker.compose.service"

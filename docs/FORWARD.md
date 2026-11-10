@@ -35,6 +35,7 @@ normalizer = "docker"
 json_profile = "json_auto"
 service_from = "tag_suffix"
 host = "application-host"
+# application_attributes = "top_level"   # see Application attributes below
 ```
 
 Routes and principals can only name indexes declared under `[indexes.<name>]`,
@@ -149,9 +150,11 @@ overload and can be retried.
 ## Normalization
 
 Generic routes (the default `normalizer`) store the record under
-`attributes.application`. The message is the first string field listed in
-`message_fields` (default `["message", "msg"]`), or the record as JSON when none
-matches. Generic routes don't detect Docker records from a `log` field.
+`attributes.application`, unless the route sets
+[`application_attributes`](#application-attributes). The message is the first
+string field listed in `message_fields` (default `["message", "msg"]`), or the
+record as JSON when none matches. Generic routes don't detect Docker records
+from a `log` field.
 
 Docker routes (`normalizer = "docker"`) need `container_id`, `container_name`,
 `source` and `log`, each present once as a string. Otherwise the event is stored
@@ -194,6 +197,68 @@ Docker splits long lines into partial messages. A record with any `partial_*`
 field is stored as its own event without JSON parsing, with `partial_id`,
 `partial_ordinal`, `partial_last`, the original fields and a validity flag in
 `attributes.docker.fragment`.
+
+### Application attributes
+
+By default the application's fields stay together under
+`attributes.application`. Attribute filters match only top-level attributes, so
+a field such as `runId` can't be filtered there. To store the fields at the top
+level of `attributes` instead, set the option on the route:
+
+```toml
+application_attributes = "top_level"   # default: "nested"
+```
+
+With `top_level`, a field like `runId` is stored at `attributes.runId`, and
+`attributes.application` is removed. The message, level, logger, pid, service
+and application time are derived as before. On a Docker route, the fields are
+the top-level keys of the JSON log line, so the line must parse as a JSON object
+(`parse_status` is `structured` or `json_without_message`).
+
+Logbrook writes `forward`, `docker` and `logbrook` at the top level itself. An
+application field with one of those names is stored in
+`attributes.logbrook.conflicting_fields` instead. A field named `application`
+is an ordinary field and is stored at `attributes.application`.
+
+Each event that is moved gets `attributes.forward.application_attributes` set
+to `top_level`. These events are left as the default layout produces them, with
+no marker:
+
+- Records that Logbrook preserves with `msgpack_typed_v1`, because their
+  `application` value holds tagged arrays. See
+  [MessagePack preservation](#messagepack-preservation).
+- Docker events where the log line isn't parsed as a JSON object: text lines,
+  fragments and lines over the depth limit. Their `attributes.application`
+  holds the raw driver record, which `attributes.docker` already covers.
+- Records on Docker routes that aren't Docker records, because a driver field
+  (`log`, `container_id`, `container_name`, `source`) is missing, repeated or
+  not a string. They're stored as generic records with
+  `attributes.logbrook.docker_status = "generic_fallback"`.
+
+Only the top-level keys of the record or JSON line move. Nested objects stay as
+they are. The option applies to events received after the change. Events stored
+earlier are not rewritten. The new keys count toward the same size limits as
+any other attribute.
+
+Fields that move become ordinary attributes. Fields such as `msg`, `level`,
+`time` and `service` are separate from the event's own message, level,
+timestamp and service. A filter on the attribute `level` matches that field's
+value only. It is not a severity filter; use `min_level` for that.
+
+On Docker routes with `json_profile = "text"` (the default), the log line isn't
+parsed, so no fields move. Generic routes move the record's fields whatever
+`json_profile` says.
+
+Numbers keep the value they have after projection. A MessagePack `float32` is
+stored widened to `float64`, so `0.1` sent as `float32` is stored as
+`0.10000000149011612`, and an equality filter on `0.1` doesn't match it.
+
+Promoting a top-level key with `promoted_string_keys` makes string equality
+filters on it faster. Other filters don't benefit. An index that has
+never had promoted keys can still get them. Once an index has been opened with a
+non-empty key set, its keys can't change. Rows stored before that keep using the
+slower JSON filter until export or compaction backfills them. See
+[promoted string attributes](OPERATIONS.md#promoted-string-attributes).
 
 ### MessagePack preservation
 

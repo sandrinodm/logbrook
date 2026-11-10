@@ -74,6 +74,17 @@ pub enum JsonProfile {
     JsonAuto,
 }
 
+/// Where the application's own fields are stored in `attributes`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationAttributes {
+    /// Keep the fields together under `attributes.application`.
+    #[default]
+    Nested,
+    /// Store the fields directly under `attributes`, where attribute filters can match them.
+    TopLevel,
+}
+
 /// Settings that shape normalized events for one route.
 #[derive(Clone, Debug)]
 pub struct NormalizationOptions {
@@ -81,6 +92,9 @@ pub struct NormalizationOptions {
     pub profile: NormalizationProfile,
     /// How the Docker adapter interprets structured application log lines.
     pub json_profile: JsonProfile,
+    /// Whether the application's fields stay under `attributes.application` or move to the top
+    /// level of `attributes`.
+    pub application_attributes: ApplicationAttributes,
     /// Receipt time in milliseconds, used in place of a zero event time.
     pub received_at: i64,
     /// Whether an event whose time is zero takes `received_at`.
@@ -117,6 +131,7 @@ impl Default for NormalizationOptions {
         Self {
             profile: NormalizationProfile::Generic,
             json_profile: JsonProfile::JsonAuto,
+            application_attributes: ApplicationAttributes::Nested,
             received_at: 0,
             zero_time_to_receipt: true,
             service: None,
@@ -269,7 +284,8 @@ fn projection_bound(value: &Value) -> Result<usize, ProtocolError> {
     Ok(total)
 }
 
-/// Normalizes one event, then applies the Docker profile or the application time.
+/// Normalizes one event, then applies the Docker profile and the application time, and last
+/// lifts the application fields to the top level when the route asks for `top_level`.
 fn normalize_event(
     envelope: &ForwardEnvelope,
     event: &ForwardEvent,
@@ -286,11 +302,89 @@ fn normalize_event(
         );
     }
 
+    // Last, so that nothing later overwrites or reinterprets the moved keys.
+    if options.application_attributes == ApplicationAttributes::TopLevel {
+        lift_application_attributes(options.profile, &mut normalized);
+    }
+
     if normalized.message.len() > options.max_message_bytes {
         return Err(ProtocolError::message_limit());
     }
 
     Ok(normalized)
+}
+
+/// Top-level attribute keys that Logbrook writes itself. An application field with one of these
+/// names goes to `logbrook.conflicting_fields` instead.
+const RESERVED_TOP_LEVEL: [&str; 3] = ["forward", "docker", "logbrook"];
+
+/// Moves the fields of `attributes.application` to the top level of `attributes`.
+///
+/// Events are left as they are when the application object is not a plain JSON projection: a
+/// typed projection (`record_encoding` is set), a value that is not an object, or, on the Docker
+/// profile, a raw driver record, which is what `application` holds unless the log line was
+/// parsed as a JSON object. They are also left as they are when the attributes do not have the
+/// shape the move needs: `forward` is not an object, or `logbrook` or `logbrook.conflicting_fields`
+/// exists but is not an object. Every check runs before anything moves, so an event is never
+/// left half-moved.
+fn lift_application_attributes(profile: NormalizationProfile, output: &mut NormalizedEvent) {
+    let Some(attributes) = output.attributes.as_object_mut() else {
+        return;
+    };
+    let Some(Json::Object(forward)) = attributes.get("forward") else {
+        return;
+    };
+    if forward.contains_key("record_encoding") {
+        return;
+    }
+    if !attributes.get("application").is_some_and(Json::is_object) {
+        return;
+    }
+    let logbrook = attributes.get("logbrook");
+    if profile == NormalizationProfile::Docker {
+        // The text profile writes no `parse_status`.
+        let parsed_as_object = logbrook
+            .and_then(|logbrook| logbrook.get("parse_status"))
+            .and_then(Json::as_str)
+            .is_some_and(|status| matches!(status, "structured" | "json_without_message"));
+        if !parsed_as_object {
+            return;
+        }
+    }
+    let logbrook_is_usable = match logbrook {
+        None => true,
+        Some(Json::Object(logbrook)) => match logbrook.get("conflicting_fields") {
+            None | Some(Json::Object(_)) => true,
+            Some(_) => false,
+        },
+        Some(_) => false,
+    };
+    if !logbrook_is_usable {
+        return;
+    }
+
+    let Some(Json::Object(application)) = attributes.remove("application") else {
+        return;
+    };
+    for (key, value) in application {
+        if RESERVED_TOP_LEVEL.contains(&key.as_str()) {
+            // An existing `logbrook` object keeps its other keys.
+            let logbrook = attributes.entry("logbrook").or_insert_with(|| json!({}));
+            if let Json::Object(logbrook) = logbrook
+                && let Json::Object(conflicting) = logbrook
+                    .entry("conflicting_fields")
+                    .or_insert_with(|| json!({}))
+            {
+                conflicting.insert(key, value);
+            }
+        } else {
+            attributes.insert(key, value);
+        }
+    }
+
+    if let Some(Json::Object(forward)) = attributes.get_mut("forward") {
+        forward.insert("application_attributes".into(), json!("top_level"));
+    }
 }
 
 /// Counts how many bytes `event` serializes to, failing once the count passes `max`.
@@ -1081,5 +1175,350 @@ mod tests {
             ..NormalizationOptions::default()
         };
         assert!(normalize_envelope(&input, &options).is_err());
+    }
+
+    fn top_level(profile: NormalizationProfile, json_profile: JsonProfile) -> NormalizationOptions {
+        NormalizationOptions {
+            profile,
+            json_profile,
+            application_attributes: ApplicationAttributes::TopLevel,
+            ..NormalizationOptions::default()
+        }
+    }
+
+    fn nested_of(options: &NormalizationOptions) -> NormalizationOptions {
+        NormalizationOptions {
+            application_attributes: ApplicationAttributes::Nested,
+            ..options.clone()
+        }
+    }
+
+    /// Asserts that `top_level` leaves the event as `nested` produces it, with no marker.
+    fn assert_unlifted(record: Value, options: &NormalizationOptions) -> NormalizedEvent {
+        let lifted = normalize_envelope(&envelope(record.clone()), options)
+            .unwrap()
+            .remove(0);
+        let nested = normalize_envelope(&envelope(record), &nested_of(options))
+            .unwrap()
+            .remove(0);
+        assert_eq!(lifted.attributes, nested.attributes);
+        assert!(
+            lifted.attributes["forward"]
+                .get("application_attributes")
+                .is_none()
+        );
+        assert!(lifted.attributes.get("container_id").is_none());
+        assert!(lifted.attributes.get("log").is_none());
+        lifted
+    }
+
+    #[test]
+    fn top_level_docker_json_lines_store_application_fields_beside_logbrook_attributes() {
+        let options = top_level(NormalizationProfile::Docker, JsonProfile::JsonAuto);
+        let record = docker(r#"{"msg":"x","runId":"r1","actorId":"a1"}"#);
+        let lifted = normalize_envelope(&envelope(record.clone()), &options)
+            .unwrap()
+            .remove(0);
+        let nested = normalize_envelope(&envelope(record), &nested_of(&options))
+            .unwrap()
+            .remove(0);
+
+        let attributes = &lifted.attributes;
+        assert_eq!(attributes["runId"], "r1");
+        assert_eq!(attributes["actorId"], "a1");
+        assert_eq!(attributes["msg"], "x");
+        assert!(attributes.get("application").is_none());
+        assert_eq!(attributes["forward"]["application_attributes"], "top_level");
+        assert_eq!(attributes["logbrook"]["parse_status"], "structured");
+        assert_eq!(attributes["docker"], nested.attributes["docker"]);
+        assert_eq!(lifted.message, nested.message);
+        assert_eq!(lifted.level, nested.level);
+
+        // The default keeps the nested layout.
+        assert_eq!(nested.attributes["application"]["runId"], "r1");
+        assert!(nested.attributes.get("runId").is_none());
+        assert!(
+            nested.attributes["forward"]
+                .get("application_attributes")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn top_level_moves_reserved_keys_to_conflicting_fields_and_keeps_application_field() {
+        let options = top_level(NormalizationProfile::Docker, JsonProfile::JsonAuto);
+        let line = r#"{"msg":"x","application":"app","docker":"y","logbrook":"z","forward":"w"}"#;
+        let event = normalize_envelope(&envelope(docker(line)), &options)
+            .unwrap()
+            .remove(0);
+        let attributes = &event.attributes;
+
+        assert_eq!(attributes["application"], "app");
+        assert_eq!(
+            attributes["logbrook"]["conflicting_fields"],
+            json!({"docker": "y", "logbrook": "z", "forward": "w"})
+        );
+        assert_eq!(attributes["logbrook"]["parse_status"], "structured");
+        assert_eq!(attributes["docker"]["container_id"], "abc");
+        assert_eq!(attributes["docker"]["stream"], "stderr");
+        assert_eq!(attributes["forward"]["tag"], "configured.tag");
+        assert_eq!(attributes["forward"]["application_attributes"], "top_level");
+    }
+
+    #[test]
+    fn top_level_generic_route_moves_natural_json_fields() {
+        let options = top_level(NormalizationProfile::Generic, JsonProfile::Text);
+        let record = fields(&[
+            ("message", Value::string("hello")),
+            ("runId", Value::string("r1")),
+            ("logbrook", Value::string("mine")),
+        ]);
+        let event = normalize_envelope(&envelope(record), &options)
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(event.message, "hello");
+        assert_eq!(event.attributes["runId"], "r1");
+        assert_eq!(event.attributes["message"], "hello");
+        assert!(event.attributes.get("application").is_none());
+        assert_eq!(
+            event.attributes["logbrook"],
+            json!({"conflicting_fields": {"logbrook": "mine"}})
+        );
+        assert_eq!(
+            event.attributes["forward"]["application_attributes"],
+            "top_level"
+        );
+    }
+
+    #[test]
+    fn top_level_keeps_existing_logbrook_object_when_adding_conflicts() {
+        let options = NormalizationOptions {
+            application_time_field: Some("ts".into()),
+            application_time_format: Some("unix_ms".into()),
+            ..top_level(NormalizationProfile::Generic, JsonProfile::Text)
+        };
+        let record = fields(&[
+            ("ts", Value::Integer(1_700_000_000_123)),
+            ("docker", Value::string("d")),
+        ]);
+        let event = normalize_envelope(&envelope(record), &options)
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(event.event_time, 1_700_000_000_123);
+        assert_eq!(event.attributes["ts"], 1_700_000_000_123_i64);
+        assert_eq!(
+            event.attributes["logbrook"]["application_time_status"],
+            "applied"
+        );
+        assert_eq!(
+            event.attributes["logbrook"]["conflicting_fields"],
+            json!({"docker": "d"})
+        );
+    }
+
+    #[test]
+    fn top_level_leaves_typed_fallback_records_nested() {
+        // Duplicate keys need the typed projection.
+        let record = Value::Map(vec![
+            (Value::string("x"), Value::Integer(1)),
+            (Value::string("x"), Value::Integer(2)),
+        ]);
+        let options = top_level(NormalizationProfile::Generic, JsonProfile::Text);
+        let event = assert_unlifted(record, &options);
+        assert_eq!(
+            event.attributes["forward"]["record_encoding"],
+            "msgpack_typed_v1"
+        );
+        assert!(event.attributes["application"].is_array());
+    }
+
+    #[test]
+    fn top_level_leaves_docker_raw_records_nested() {
+        let options = top_level(NormalizationProfile::Docker, JsonProfile::JsonAuto);
+
+        let event = assert_unlifted(docker("raw\nstack"), &options);
+        assert_eq!(event.attributes["logbrook"]["parse_status"], "text");
+
+        let text = top_level(NormalizationProfile::Docker, JsonProfile::Text);
+        assert_unlifted(docker(r#"{"msg":"x","runId":"r1"}"#), &text);
+
+        let mut fragment = docker(r#"{"msg":"partial"#);
+        let Value::Map(ref mut entries) = fragment else {
+            panic!("map")
+        };
+        entries.extend(
+            [
+                ("partial_id", Value::string("id")),
+                ("partial_ordinal", Value::string("2")),
+                ("partial_last", Value::string("false")),
+            ]
+            .into_iter()
+            .map(|(k, v)| (Value::string(k), v)),
+        );
+        let event = assert_unlifted(fragment, &options);
+        assert_eq!(event.attributes["logbrook"]["parse_status"], "fragment");
+
+        let event = assert_unlifted(fields(&[("message", Value::string("m"))]), &options);
+        assert_eq!(
+            event.attributes["logbrook"]["docker_status"],
+            "generic_fallback"
+        );
+
+        let shallow = NormalizationOptions {
+            max_json_depth: 1,
+            ..options
+        };
+        let event = assert_unlifted(docker(r#"{"msg":"ok","nested":{}}"#), &shallow);
+        assert_eq!(
+            event.attributes["logbrook"]["parse_status"],
+            "json_depth_limit"
+        );
+    }
+
+    #[test]
+    fn top_level_leaves_docker_parsed_line_nested_when_record_is_typed() {
+        // A binary field makes the record typed, and the parsed line goes to the docker object.
+        let mut record = docker(r#"{"msg":"x","runId":"r1"}"#);
+        let Value::Map(ref mut entries) = record else {
+            panic!("map")
+        };
+        entries.push((Value::string("blob"), Value::Binary(vec![0, 255])));
+        let options = top_level(NormalizationProfile::Docker, JsonProfile::JsonAuto);
+        let event = assert_unlifted(record, &options);
+        assert_eq!(
+            event.attributes["forward"]["record_encoding"],
+            "msgpack_typed_v1"
+        );
+        assert_eq!(
+            event.attributes["docker"]["parsed_application"]["runId"],
+            "r1"
+        );
+        assert!(event.attributes.get("runId").is_none());
+    }
+
+    #[test]
+    fn top_level_applies_application_time_on_docker_routes() {
+        let options = NormalizationOptions {
+            application_time_field: Some("ts".into()),
+            application_time_format: Some("unix_ms".into()),
+            ..top_level(NormalizationProfile::Docker, JsonProfile::JsonAuto)
+        };
+        let event = normalize_envelope(
+            &envelope(docker(r#"{"msg":"x","ts":1700000000123,"runId":"r1"}"#)),
+            &options,
+        )
+        .unwrap()
+        .remove(0);
+
+        assert_eq!(event.event_time, 1_700_000_000_123);
+        assert_eq!(
+            event.attributes["logbrook"]["application_time_status"],
+            "applied"
+        );
+        assert_eq!(event.attributes["runId"], "r1");
+        assert_eq!(event.attributes["ts"], 1_700_000_000_123_i64);
+    }
+
+    fn event_with(attributes: Json) -> NormalizedEvent {
+        NormalizedEvent {
+            event_time: 0,
+            level: 0,
+            service: None,
+            logger: None,
+            host: None,
+            pid: None,
+            message: String::new(),
+            attributes,
+        }
+    }
+
+    #[test]
+    fn lifting_skips_events_with_unexpected_attribute_shapes_without_panicking() {
+        let cases = [
+            // `logbrook` is not an object.
+            json!({"forward": {}, "logbrook": "text", "application": {"docker": "d", "a": 1}}),
+            // `forward` is missing.
+            json!({"application": {"docker": "d", "a": 1}}),
+            // `forward` is not an object.
+            json!({"forward": 7, "application": {"a": 1}}),
+            // `conflicting_fields` is not an object.
+            json!({
+                "forward": {},
+                "logbrook": {"conflicting_fields": []},
+                "application": {"docker": "d", "a": 1}
+            }),
+            // The same on the Docker profile, where the `parse_status` check passes first.
+            json!({
+                "forward": {},
+                "logbrook": {"parse_status": "structured", "conflicting_fields": []},
+                "application": {"docker": "d", "a": 1}
+            }),
+        ];
+        for attributes in cases {
+            for profile in [NormalizationProfile::Generic, NormalizationProfile::Docker] {
+                let mut event = event_with(attributes.clone());
+                lift_application_attributes(profile, &mut event);
+                assert_eq!(event.attributes, attributes);
+            }
+        }
+    }
+
+    #[test]
+    fn top_level_docker_json_without_message_lines_are_lifted() {
+        let options = top_level(NormalizationProfile::Docker, JsonProfile::JsonAuto);
+        let event = normalize_envelope(&envelope(docker(r#"{"runId":"r1"}"#)), &options)
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(
+            event.attributes["logbrook"]["parse_status"],
+            "json_without_message"
+        );
+        assert_eq!(event.attributes["runId"], "r1");
+        assert!(event.attributes.get("application").is_none());
+        assert_eq!(
+            event.attributes["forward"]["application_attributes"],
+            "top_level"
+        );
+    }
+
+    #[test]
+    fn top_level_docker_text_profile_with_application_time_field_is_not_lifted() {
+        let options = NormalizationOptions {
+            application_time_field: Some("ts".into()),
+            application_time_format: Some("unix_ms".into()),
+            ..top_level(NormalizationProfile::Docker, JsonProfile::Text)
+        };
+        let event = assert_unlifted(docker(r#"{"ts":1700000000123,"runId":"r1"}"#), &options);
+
+        // A `logbrook` object exists, with the time status only.
+        assert!(
+            event.attributes["logbrook"]
+                .get("application_time_status")
+                .is_some()
+        );
+        assert!(event.attributes["logbrook"].get("parse_status").is_none());
+        assert!(event.attributes.get("runId").is_none());
+    }
+
+    #[test]
+    fn top_level_generic_field_named_application_is_stored_as_application() {
+        let options = top_level(NormalizationProfile::Generic, JsonProfile::Text);
+        let record = fields(&[
+            ("message", Value::string("hello")),
+            ("application", Value::string("tv-archive")),
+        ]);
+        let event = normalize_envelope(&envelope(record), &options)
+            .unwrap()
+            .remove(0);
+
+        assert_eq!(event.attributes["application"], "tv-archive");
+        assert_eq!(
+            event.attributes["forward"]["application_attributes"],
+            "top_level"
+        );
+        assert!(event.attributes.get("logbrook").is_none());
     }
 }

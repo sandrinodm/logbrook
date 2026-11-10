@@ -1,9 +1,13 @@
 //! Socket tests use independently specified MessagePack frames and verify storage after ACK.
 use logbrook::{
+    attribute_filter::AttributeFilters,
     config::Config,
     forward::{
         Receiver,
-        config::{ForwardConfig, ListenerConfig, PrincipalConfig, RouteConfig},
+        config::{
+            ApplicationAttributes, ForwardConfig, JsonProfile, ListenerConfig,
+            NormalizationProfile, PrincipalConfig, RouteConfig,
+        },
         decode::{decode_value, encode_value},
         protocol::{CodecLimits, Value},
     },
@@ -734,4 +738,149 @@ async fn exact_tag_route_is_authorized_without_accepting_unmatched_suffix() {
     stop.send(true).unwrap();
     server.await.unwrap().unwrap();
     registry.shutdown().await.unwrap();
+}
+
+fn run_id_filter(value: &str) -> AttributeFilters {
+    AttributeFilters::parse(
+        &serde_json::json!({"attributes": [{"key": "runId", "op": "eq", "value": value}]})
+            .to_string(),
+        usize::MAX,
+    )
+    .unwrap()
+}
+
+/// Sends one envelope to a route with the given `mode` and checks the `runId` filter.
+///
+/// `top_level` must find the event. The `nested` control must not, so the match comes from the
+/// option and not from the filter.
+///
+/// The Docker route holds a Docker-shaped record, so its application fields come from the JSON
+/// log line. `promoted` also promotes `runId` to a column on the index.
+async fn top_level_filter_case(docker: bool, promoted: bool, mode: ApplicationAttributes) {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(root.path());
+    if promoted {
+        config.storage.promoted_string_keys = vec!["runId".into()];
+    }
+    config.forward.routes[0].application_attributes = mode;
+    // Routes must not overlap, so the Docker route has its own tag prefix.
+    config.forward.routes.push(RouteConfig {
+        listener: "local".into(),
+        tag_prefix: "docker.".into(),
+        index: "default".into(),
+        normalizer: NormalizationProfile::Docker,
+        json_profile: JsonProfile::JsonAuto,
+        application_attributes: mode,
+        ..Default::default()
+    });
+    config.validate().unwrap();
+    let registry = IndexRegistry::open(config.clone()).await.unwrap();
+    let receiver = Receiver::bind(config.forward, registry.clone())
+        .await
+        .unwrap();
+    let address = receiver.local_addresses().unwrap()[0];
+    let (stop, stopped) = watch::channel(false);
+    let server = tokio::spawn(receiver.serve(stopped));
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+
+    let (tag, record) = if docker {
+        (
+            "docker.worker",
+            Value::Map(vec![
+                (Value::string("container_id"), Value::string("abc")),
+                (Value::string("container_name"), Value::string("/worker")),
+                (Value::string("source"), Value::string("stdout")),
+                (
+                    Value::string("log"),
+                    Value::string(r#"{"msg":"started","runId":"r1"}"#),
+                ),
+            ]),
+        )
+    } else {
+        (
+            "app.api",
+            Value::Map(vec![
+                (Value::string("message"), Value::string("started")),
+                (Value::string("runId"), Value::string("r1")),
+            ]),
+        )
+    };
+    let wire = encode_value(&Value::Array(vec![
+        Value::string(tag),
+        Value::Integer(0),
+        record,
+        Value::Map(vec![(Value::string("chunk"), Value::string("chunk-run"))]),
+    ]));
+    stream.write_all(&wire).await.unwrap();
+    ack(&mut stream).await;
+
+    let storage = &registry.get("default").unwrap().storage;
+    let matching = Query {
+        attributes: run_id_filter("r1"),
+        ..all()
+    };
+    let events = storage.search(matching).await.unwrap().events;
+    if mode == ApplicationAttributes::Nested {
+        assert!(events.is_empty(), "docker={docker} promoted={promoted}");
+        assert_eq!(storage.search(all()).await.unwrap().events.len(), 1);
+    } else {
+        assert_eq!(events.len(), 1, "docker={docker} promoted={promoted}");
+        assert_eq!(events[0].attributes["runId"], "r1");
+        assert!(events[0].attributes.get("application").is_none());
+        assert_eq!(
+            events[0].attributes["forward"]["application_attributes"],
+            "top_level"
+        );
+
+        // The promoted column must be what answered the query: the row is covered by the
+        // projection.
+        let status = storage.projection_status().await.unwrap();
+        assert_eq!(
+            status.hot_covered_rows,
+            u64::from(promoted),
+            "docker={docker} promoted={promoted}"
+        );
+
+        let other = Query {
+            attributes: run_id_filter("r2"),
+            ..all()
+        };
+        assert!(storage.search(other).await.unwrap().events.is_empty());
+    }
+
+    registry.stop_admission();
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn top_level_application_attributes_can_be_filtered_after_forward_ingest() {
+    top_level_filter_case(false, false, ApplicationAttributes::TopLevel).await;
+}
+
+#[tokio::test]
+async fn top_level_application_attributes_can_be_filtered_through_a_promoted_key() {
+    top_level_filter_case(false, true, ApplicationAttributes::TopLevel).await;
+}
+
+#[tokio::test]
+async fn top_level_docker_application_attributes_can_be_filtered_after_forward_ingest() {
+    top_level_filter_case(true, false, ApplicationAttributes::TopLevel).await;
+}
+
+#[tokio::test]
+async fn top_level_docker_application_attributes_can_be_filtered_through_a_promoted_key() {
+    top_level_filter_case(true, true, ApplicationAttributes::TopLevel).await;
+}
+
+#[tokio::test]
+async fn nested_routes_do_not_match_application_fields_as_attributes() {
+    for (docker, promoted) in [(false, false), (false, true), (true, false), (true, true)] {
+        top_level_filter_case(docker, promoted, ApplicationAttributes::Nested).await;
+    }
 }

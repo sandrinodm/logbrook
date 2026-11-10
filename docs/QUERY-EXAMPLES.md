@@ -213,7 +213,7 @@ query_window --message 'rate limit 100% reached'
 query_window --service api --min-level 50 --message timeout
 ```
 
-`--message` matches a literal substring. `%`, `_`, `*`, `|` and parentheses are ordinary characters, so `--message 'timeout|declined'` looks for that exact text, and `service:api AND level:50` is just a string. Top-level attribute equality goes through `--filter`. For case-insensitive matching, OR and NOT, nested attributes or ranges, use the export recipes below.
+`--message` matches a literal substring. `%`, `_`, `*`, `|` and parentheses are ordinary characters, so `--message 'timeout|declined'` looks for that exact text, and `service:api AND level:50` is just a string. Top-level attribute equality goes through `--filter`. For events received over Fluent Forward, set [`application_attributes = "top_level"`](FORWARD.md#application-attributes) on the route to filter on application fields. For case-insensitive matching, OR and NOT, nested attributes or ranges, use the export recipes below.
 
 ## 8. Count the full matching window
 
