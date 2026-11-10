@@ -10,7 +10,7 @@ Report suspected security vulnerabilities privately using [the security policy](
 
 ## Set up a development environment
 
-Follow the [build prerequisites and quick start](README.md#quick-start), then the [development checks](README.md#development). The Pino example uses Node.js with npm; CI uses Node.js 26.13.0.
+Follow [build from source](README.md#build-from-source), then the [development checks](README.md#development). The Pino example uses Node.js with npm; CI uses Node.js 26.13.0.
 
 Use a separate data directory for development. Tests and load generators write synthetic events, and some checks kill their own test servers on purpose. Keep them away from production data.
 

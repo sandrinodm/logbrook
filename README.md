@@ -6,7 +6,7 @@ Self-hosted log search for structured application logs.
 
 Logbrook is a single Rust executable that receives JSON logs over HTTP, stores recent events in an embedded DuckDB database, moves older events into local Parquet files, and searches both through its CLI and HTTP API. It runs on one server with one data directory and needs no external database or message queue.
 
-> **Status:** Logbrook is pre-release software. Each [release](https://github.com/sandrinodm/logbrook/releases) publishes a container image for Linux amd64 and arm64 to `ghcr.io/sandrinodm/logbrook`; you can also build it from source as described below. APIs and storage formats may change before a stable release.
+> **Status:** Logbrook is pre-release software. Each [release](https://github.com/sandrinodm/logbrook/releases) publishes a container image for Linux amd64 and arm64 to `ghcr.io/sandrinodm/logbrook`, which is the recommended way to run it. You can also [build it from source](#build-from-source). APIs and storage formats may change before a stable release.
 
 ## Features
 
@@ -28,47 +28,38 @@ Applications send logs to Logbrook over HTTP. Each index stores recent logs in e
 
 ## Quick start
 
-These steps build Logbrook from source and run it in the foreground on `127.0.0.1:3100`. Run every command from the repository root.
+These steps run the published container image on `127.0.0.1:3100`, send an event, and search it. You need Docker, plus `openssl` and `curl` on the host. Nothing persists after you remove the container; for a setup that keeps its data, use [Docker Compose](#run-with-docker-compose).
 
-### Prerequisites
+### 1. Generate credentials
 
-- **Rust** via [rustup](https://rustup.rs). The repository pins Rust 1.99.1 in `rust-toolchain.toml`; rustup installs that version on the first `cargo` command.
-- **A C++ compiler** for the bundled DuckDB build. On macOS, install the Xcode command-line tools with `xcode-select --install`.
-- **`openssl` and `curl`** for the commands below.
-
-If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` or open a new shell.
-
-### 1. Build
-
-```sh
-cargo build --package logbrook --locked --release
-```
-
-The first build compiles DuckDB from source and takes several minutes.
-
-### 2. Start the server
-
-Generate separate ingestion and read credentials, print them so you can use them in another terminal, and start the server:
+Logbrook needs a separate ingestion token and read token:
 
 ```sh
 export LOGBROOK_INGEST_TOKEN="$(openssl rand -hex 24)"
 export LOGBROOK_READ_TOKEN="$(openssl rand -hex 24)"
-echo "Ingest token: $LOGBROOK_INGEST_TOKEN"
-echo "Read token:   $LOGBROOK_READ_TOKEN"
-
-target/release/logbrook check-config
-target/release/logbrook serve
 ```
 
-`serve` stays in the foreground and writes JSON logs to stderr. Press Ctrl-C to stop it. Without a configuration file, Logbrook listens on `127.0.0.1:3100`, stores data in `./data`, keeps events for seven days, and has no disk-size target.
+### 2. Start the container
+
+```sh
+docker run -d --name logbrook \
+  -p 127.0.0.1:3100:3100 \
+  -e LOGBROOK_INGEST_TOKEN \
+  -e LOGBROOK_READ_TOKEN \
+  ghcr.io/sandrinodm/logbrook:latest
+
+docker exec logbrook logbrook healthcheck
+```
+
+The image listens on port 3100 and stores data in `/data`. The `127.0.0.1:` prefix publishes the port on the loopback interface only. If the health check fails, run `docker logs logbrook`; the server writes JSON logs to stderr.
+
+`latest` points at the newest release. For anything you keep, pin a version tag such as `ghcr.io/sandrinodm/logbrook:0.2.0`, or a digest, from the [package page](https://github.com/sandrinodm/logbrook/pkgs/container/logbrook).
 
 ### 3. Send an event
 
-Open a second terminal in the repository root. Set the ingestion token printed in step 2, then send one event to an index named `payments`:
+This writes one event to an index named `payments`:
 
 ```sh
-export LOGBROOK_INGEST_TOKEN='<ingest token from step 2>'
-
 curl --fail http://127.0.0.1:3100/indexes/payments/logs/ingest \
   -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
   -H 'Content-Type: application/json' \
@@ -79,28 +70,34 @@ The response is `{"accepted":1}`. Because `payments` did not exist yet, this wri
 
 ### 4. Search
 
-Set the read token in the second terminal, then search the `payments` index with the CLI:
+The container already has the read token in its environment, so run the CLI inside it:
 
 ```sh
-export LOGBROOK_READ_TOKEN='<read token from step 2>'
-target/release/logbrook query payments --since 1h
+docker exec logbrook logbrook query payments --since 1h
 ```
 
 The table shows the matching event. Add `--json` to see the complete record, including its `orderId` attribute.
 
+### 5. Clean up
+
+```sh
+docker rm -f logbrook
+```
+
 ## Run with Docker Compose
 
-Compose builds the image locally, so Docker is the only build prerequisite on the host. Both credentials must be set in the shell that runs Compose:
+The root [`compose.yaml`](compose.yaml) runs the published image with a named data volume and a hardened container. Both credentials must be set in the shell that runs Compose:
 
 ```sh
 export LOGBROOK_INGEST_TOKEN="$(openssl rand -hex 24)"
 export LOGBROOK_READ_TOKEN="$(openssl rand -hex 24)"
-docker compose up --build -d
+docker compose up -d
+docker compose exec logbrook logbrook query payments --since 1h
 ```
 
 Keep both values. You need the read token to query logs, and Compose requires both whenever it recreates the container. To enable index deletion, also export `LOGBROOK_ADMIN_TOKEN` before starting Compose.
 
-The service is published on the host's `127.0.0.1:3100` and stores data in the `logs` named volume. Compose defaults to seven-day retention, a 20 GB size target per index, and at most four indexes. The [retention settings](#retention-and-disk-size) below can be exported before `docker compose up -d` to change them.
+Compose uses `ghcr.io/sandrinodm/logbrook:latest` unless you set `LOGBROOK_IMAGE`, for example to a pinned release such as `ghcr.io/sandrinodm/logbrook:0.2.0`, or to an image you [built yourself](#build-from-source). The service is published on the host's `127.0.0.1:3100` and stores data in the `logs` named volume. Compose defaults to seven-day retention, a 20 GB size target per index, and at most four indexes. The [retention settings](#retention-and-disk-size) below can be exported before `docker compose up -d` to change them.
 
 The runtime image is digest-pinned Distroless with no shell. The container runs as UID 10001 with a read-only root filesystem, no Linux capabilities, and a 35-second shutdown grace period. Compose sets no CPU or memory limit. Logbrook serves plain HTTP; put a TLS-terminating reverse proxy in front of it before exposing it beyond the local machine. See [container packaging](docs/CONTAINER.md) for image details and verification.
 
@@ -133,20 +130,25 @@ logbrook indexes create audit
 logbrook indexes delete audit --yes    # Admin token only; permanently removes data
 ```
 
-If `logbrook` is not on your `PATH`, use `target/release/logbrook` from the repository root. Add `--json` for machine-readable output. The [CLI guide](docs/CLI.md) covers credentials, pagination, deletion, and use inside the container. The [query cookbook](docs/QUERY-EXAMPLES.md) has a twelve-event demo with expected results and recipes for filtering, exports, facets, histograms, and live tail.
+With the container image, run the same commands inside the container: `docker exec logbrook logbrook ...`, or `docker compose exec logbrook logbrook ...` with Compose. They use the tokens in the container's environment. With a [source build](#build-from-source), use `target/release/logbrook`. Add `--json` for machine-readable output. The [CLI guide](docs/CLI.md) covers credentials, pagination, deletion, and use inside the container. The [query cookbook](docs/QUERY-EXAMPLES.md) has a twelve-event demo with expected results and recipes for filtering, exports, facets, histograms, and live tail.
 
 ## Configuration
 
 Settings are resolved in this order: built-in defaults, then an optional TOML file passed with `--config`, then supported `LOGBROOK_*` environment variables.
 
+With the container image, mount the file read-only and pass `--config`:
+
 ```sh
 cp logbrook.example.toml logbrook.local.toml
 # Edit logbrook.local.toml and replace every replace-with-... credential.
-target/release/logbrook --config logbrook.local.toml check-config
-target/release/logbrook --config logbrook.local.toml serve
+docker run --rm -v "$PWD/logbrook.local.toml:/etc/logbrook.toml:ro" \
+  ghcr.io/sandrinodm/logbrook:latest --config /etc/logbrook.toml check-config
+docker run -d --name logbrook -p 127.0.0.1:3100:3100 \
+  -v "$PWD/logbrook.local.toml:/etc/logbrook.toml:ro" -v logbrook-data:/data \
+  ghcr.io/sandrinodm/logbrook:latest --config /etc/logbrook.toml serve
 ```
 
-Files named `*.local.toml` are ignored by Git. Environment variables still override the file, so unset the quick-start token variables if you want the file's credentials to apply.
+The image sets `LOGBROOK_BIND=0.0.0.0:3100` and `LOGBROOK_DATA_DIR=/data`, which override the file's `bind` and `data_dir`. With a [source build](#build-from-source), run `target/release/logbrook --config logbrook.local.toml serve`. Files named `*.local.toml` are ignored by Git. Environment variables still override the file, so unset the quick-start token variables if you want the file's credentials to apply.
 
 ### Credentials
 
@@ -233,6 +235,29 @@ The [API reference](docs/API.md) covers authentication, request and response for
 - **Crash tests kill the process.** They don't cover power loss or disk, filesystem, or VM failures.
 - **Plain HTTP only.** Use a reverse proxy for TLS.
 - **Structured filters only.** There is no query language or SQL endpoint.
+
+## Build from source
+
+Most setups don't need this: the [container image](#quick-start) is built from the same source for every release. Build it yourself to run an unreleased commit, a platform without an image, or the binary without Docker.
+
+You need [rustup](https://rustup.rs), which installs the Rust version pinned in `rust-toolchain.toml` on the first `cargo` command, and a C++ compiler for the bundled DuckDB build. On macOS, install the Xcode command-line tools with `xcode-select --install`. If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` or open a new shell.
+
+From the repository root, build the binary and run it in the foreground with the credentials from the [quick start](#1-generate-credentials):
+
+```sh
+cargo build --package logbrook --locked --release
+target/release/logbrook check-config
+target/release/logbrook serve
+```
+
+The first build compiles DuckDB from source and takes several minutes. `serve` writes JSON logs to stderr; press Ctrl-C to stop it. Without a configuration file, the binary listens on `127.0.0.1:3100`, stores data in `./data`, keeps events for seven days, and has no disk-size target.
+
+To build the container image instead and run it with Compose:
+
+```sh
+docker build -t logbrook:local .
+LOGBROOK_IMAGE=logbrook:local docker compose up -d
+```
 
 ## Development
 

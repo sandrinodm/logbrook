@@ -1,6 +1,7 @@
 services:
   logbrook:
-    build: ../..
+    # Set LOGBROOK_IMAGE to pin a release or use a local build (logbrook:local).
+    image: ${LOGBROOK_IMAGE:-ghcr.io/sandrinodm/logbrook:latest}
     command: ["--config", "/etc/logbrook.toml", "serve"]
     environment:
       LOGBROOK_INGEST_TOKEN: ${LOGBROOK_INGEST_TOKEN:?Set a random HTTP ingestion token}

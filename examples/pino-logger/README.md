@@ -52,11 +52,13 @@ logbrook query "$LOGBROOK_INDEX" --since 15m --service checkout --json
 logbrook count "$LOGBROOK_INDEX" --since 15m --service checkout
 ```
 
-If `logbrook` isn't on your `PATH`, point a shell function at your build. From this directory:
+If `logbrook` isn't on your `PATH`, run it inside the server's container. For the container named `logbrook` from the [root quick start](../../README.md#quick-start), passing your read token through:
 
 ```sh
-logbrook() { ../../target/release/logbrook "$@"; }
+logbrook() { docker exec -i -e LOGBROOK_TOKEN -e LOGBROOK_READ_TOKEN logbrook logbrook "$@"; }
 ```
+
+With a [source build](../../README.md#build-from-source), use `logbrook() { ../../target/release/logbrook "$@"; }` from this directory instead.
 
 After one run against a new index the count is `4`, and each further run adds four.
 

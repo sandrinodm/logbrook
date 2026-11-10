@@ -1,7 +1,7 @@
 services:
   logbrook:
     # Use a published version/digest, or an image built locally from the repository.
-    image: ${LOGBROOK_IMAGE:?Set LOGBROOK_IMAGE to a published or locally built image}
+    image: ${LOGBROOK_IMAGE:?Set LOGBROOK_IMAGE to a ghcr.io/sandrinodm/logbrook release tag or digest}
     ports:
       - "127.0.0.1:3100:3100"
     environment:

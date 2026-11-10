@@ -92,7 +92,7 @@ docker compose up -d --wait --wait-timeout 120
 docker compose exec -T logbrook logbrook indexes list
 ```
 
-The template relies on the image's built-in health check. `config --quiet` validates the file without printing the expanded credentials. Shell variables override `.env`, so unset stale ones or update them on purpose before recreating the service. To use the repository's root `compose.yaml` instead, which builds from source, run `docker compose up --build -d --wait` in the checkout.
+The template relies on the image's built-in health check. `config --quiet` validates the file without printing the expanded credentials. Shell variables override `.env`, so unset stale ones or update them on purpose before recreating the service. The repository's root `compose.yaml` also runs the published image, defaulting to `latest`; prefer this template, which pins the image chosen above.
 
 ## Connect applications and verify storage
 

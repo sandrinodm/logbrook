@@ -1,6 +1,8 @@
 services:
   logbrook:
-    build: .
+    # The published release image. Set LOGBROOK_IMAGE to pin a version
+    # (ghcr.io/sandrinodm/logbrook:0.2.0), a digest, or a local build (logbrook:local).
+    image: ${LOGBROOK_IMAGE:-ghcr.io/sandrinodm/logbrook:latest}
     ports:
       - "127.0.0.1:3100:3100"
     environment:

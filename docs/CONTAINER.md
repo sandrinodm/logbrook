@@ -1,5 +1,12 @@
 # Container packaging
 
+Each release publishes this image to `ghcr.io/sandrinodm/logbrook` for
+`linux/amd64` and `linux/arm64`, tagged with its version (for example `0.2.0`).
+Run a published image rather than building your own unless you need an
+unreleased commit; [releases](RELEASING.md) covers tags, digests and
+verification. This page describes what the image contains and how to build and
+check it locally.
+
 The production image contains the Logbrook executable and its runtime libraries.
 Rust, compilers, build caches, and source files stay in the build stages. The
 runtime stage is a digest-pinned, multi-architecture
@@ -22,8 +29,8 @@ Before the runtime stage, a verification stage strips unneeded ELF symbols, runs
 don't replace the smoke test under [local verification](#local-verification).
 
 The Dockerfile's default `VERSION` build argument, used for the image's version
-label, matches the version in `Cargo.toml`, so local and Compose builds carry the
-right label. The release helper updates both, and CI passes the version
+label, matches the version in `Cargo.toml`, so local builds carry the right
+label. The release helper updates both, and CI passes the version
 explicitly.
 
 ## Runtime
@@ -60,6 +67,9 @@ cargo xtask image-inspect --image logbrook:local --max-image-mib 110
 cargo xtask container-smoke --image logbrook:local
 cargo xtask check-cli --image logbrook:local
 ```
+
+The same checks run against a published image: pass
+`--image ghcr.io/sandrinodm/logbrook:<version>` instead of building one.
 
 `container-smoke` runs disposable containers on a fresh volume with the Compose
 security settings. It checks API authentication and routing, ingestion and

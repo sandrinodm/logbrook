@@ -15,13 +15,16 @@ logbrook indexes list
 logbrook indexes show "$QUERY_INDEX" --json
 ```
 
-If `logbrook` is not on PATH, define this function for the current shell after building the binary:
+If `logbrook` is not on PATH, run the CLI from the server's container image. For a container named `logbrook`, as in the [quick start](../README.md#quick-start), define this function for the current shell. It passes your token variables into the container, so the examples' tokens apply rather than the server's:
 
 ```sh
-logbrook() { ./target/debug/logbrook "$@"; }
+logbrook() {
+  docker exec -i -e LOGBROOK_TOKEN -e LOGBROOK_READ_TOKEN -e LOGBROOK_INGEST_TOKEN -e LOGBROOK_ADMIN_TOKEN \
+    logbrook logbrook "$@"
+}
 ```
 
-Use `target/release/logbrook` instead for a release build. With Compose, run the same CLI inside the container, for example `docker compose exec logbrook logbrook query checkout --since 1h`. If you already have an index with data, you can skip the demo below.
+Inside the container, the CLI reaches the server at its default `http://127.0.0.1:3100`. With Compose, use `docker compose exec` with the same flags and the service name `logbrook`. With a [source build](../README.md#build-from-source), use `logbrook() { ./target/release/logbrook "$@"; }` instead. If you already have an index with data, you can skip the demo below.
 
 Queries use `LOGBROOK_READ_TOKEN` unless `--token` or `LOGBROOK_TOKEN` is set, so unset those if they hold a different token. Admin tokens manage indexes but cannot query events. Each request reads one index, and index names have no wildcards.
 

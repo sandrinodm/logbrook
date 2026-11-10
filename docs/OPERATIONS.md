@@ -155,9 +155,22 @@ Logbrook refuses to start on the flat `<data_dir>/events.duckdb` layout rather t
 
 Stop the destination service before importing. Use the same config file or environment variables as the server. A JSON array must fit in one request; NDJSON is streamed in bounded batches.
 
+With the container image, run the import in a one-off container on the server's data volume, with the file mounted read-only. Configuration loading still requires an ingestion and a read token, so pass the server's tokens and any other `LOGBROOK_*` settings it uses:
+
 ```sh
-target/release/logbrook --config logbrook.local.toml --index payments import events.json --source checkout
-target/release/logbrook --config logbrook.local.toml --index payments import events.ndjson --source checkout --ndjson
+docker run --rm \
+  -v logbrook_logs:/data \
+  -v "$PWD/events.ndjson:/import/events.ndjson:ro" \
+  -e LOGBROOK_INGEST_TOKEN -e LOGBROOK_READ_TOKEN \
+  ghcr.io/sandrinodm/logbrook:<version> \
+  --index payments import /import/events.ndjson --source checkout --ndjson
+```
+
+Replace `<version>` with the server's image version, and `logbrook_logs` with its volume (Compose names it `<project>_logs`). With a local binary:
+
+```sh
+logbrook --config logbrook.local.toml --index payments import events.json --source checkout
+logbrook --config logbrook.local.toml --index payments import events.ndjson --source checkout --ndjson
 ```
 
 Offline import and archive commands take `--index <name>` (default `default`). Each batch commits on its own. If a later batch is invalid or the process stops, earlier batches stay, and rerunning the whole import duplicates them. For a clean retry, import into a new data directory. Imports keep each event's time, so set retention to cover the imported history before starting the server.
@@ -167,7 +180,10 @@ Offline import and archive commands take `--index <name>` (default `default`). E
 Stop the service first. To move hot events older than a cutoff into Parquet archives:
 
 ```sh
-target/release/logbrook --config logbrook.local.toml archive --before 1791321600000
+docker run --rm -v logbrook_logs:/data -e LOGBROOK_INGEST_TOKEN -e LOGBROOK_READ_TOKEN \
+  ghcr.io/sandrinodm/logbrook:<version> archive --before 1791321600000
 ```
+
+With a local binary, run `logbrook --config logbrook.local.toml archive --before 1791321600000`.
 
 `--before` is an exclusive Unix-millisecond cutoff. Archiving doesn't delete anything; archived events stay searchable.
