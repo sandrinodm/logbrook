@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-This page shows how to take a consistent backup of a Logbrook data directory, restore it, and upgrade to a new release without losing the ability to roll back.
+Back up the whole data directory with the server stopped, restore it into a fresh directory, and take a backup before every upgrade: there are no downgrade migrations.
 
 ## What a backup contains
 
@@ -23,24 +23,24 @@ Each index lives in its own directory under the data root:
   - .index-trash/ deleted indexes, not a backup
 </FileTree>
 
-A backup needs both the DuckDB files and the Parquet archives. Neither holds all retained data alone. Archive paths are stored relative to the data root, so a complete data directory can be moved to a new location.
+A backup needs both the DuckDB files and the Parquet archives, because neither holds all retained data alone. Archive paths are stored relative to the data root, so a complete data directory can be moved to a new location.
 
 <Aside type="caution" title="Do not copy a live data directory">
-A plain recursive copy of a running server's data directory is not a consistent backup. Stop the service first and wait for it to exit cleanly.
+A copy of a running server's data directory is not a consistent backup. Stop the service first and wait for it to exit cleanly.
 </Aside>
 
 ## Back up
 
 <Steps>
 <Step title="Stop the service">
-Wait for a clean exit. Logbrook cancels maintenance, drains readers and checkpoints the writer on shutdown. Stop producers first if you want them to buffer instead of fail.
+On shutdown Logbrook cancels maintenance, drains readers and checkpoints the writer. Stop producers first if you want them to buffer instead of fail.
 
 ```sh
 docker compose stop logbrook
 ```
 </Step>
 <Step title="Copy the entire data directory">
-Copy everything, including any WAL file and all archive files, as one backup. For a container volume, copy the whole volume with a temporary utility container. This example assumes a Compose project whose volume is named `logbrook_logs`; check `docker volume ls` for yours.
+Copy everything, including any WAL file and all archive files, as one backup. For a container volume, use a temporary utility container. This example assumes a Compose project whose volume is named `logbrook_logs`; check `docker volume ls` for yours.
 
 ```sh
 mkdir -p backups
@@ -106,8 +106,7 @@ docker exec logbrook-restore logbrook query default --since 7d --limit 5
 
 At startup Logbrook checks schema versions and runs migrations inside a transaction.
 
-- The hot-table schema is versioned, up to version 4 in this release. Version 4 is applied only when you turn on [promoted string attributes](/operate/archives-and-migration/#promoted-string-attributes).
-- An index without promoted string attributes stays on schema version 3. Turning them on upgrades that index to version 4.
+- The hot-table schema is versioned, up to version 4 in this release. An index stays on version 3 until you turn on [promoted string attributes](/operate/archives-and-migration/#promoted-string-attributes), which upgrades that index to version 4.
 - Older archive metadata is migrated before the server starts serving.
 - Startup rejects a database whose schema is newer than the binary supports. A binary that only knows version 3 refuses a version 4 index.
 - **There are no downgrade migrations.**
@@ -116,7 +115,7 @@ To upgrade safely:
 
 <Steps>
 <Step title="Back up">
-Take a complete offline backup as above.
+Take a complete offline backup as described above.
 </Step>
 <Step title="Try the new release on a copy">
 Restore the backup into a new directory and start the new version on it. Check counts and sample events.

@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-This page walks through an investigation from the first error to an export. Load the demo dataset once, then work through the recipes. Every count in a "Demo" comment is the answer you should see.
+Recipes for an investigation, from the first error to an export. Load the demo dataset once, then work through them. Each "demo" comment gives the answer you should see.
 
 ## Set up
 
@@ -19,13 +19,13 @@ export QUERY_INDEX=checkout
 logbrook indexes list
 ```
 
-`QUERY_INDEX`, `QUERY_FROM_MS` and `QUERY_TO_MS` are ordinary shell variables that the recipes and helpers below pass to `logbrook` and `curl`. The `logbrook` binary does not read them itself.
+`QUERY_INDEX`, `QUERY_FROM_MS` and `QUERY_TO_MS` are ordinary shell variables that the recipes pass to `logbrook` and `curl`. The binary doesn't read them.
 
-With Docker Compose, run the CLI inside the container, for example `docker compose exec logbrook logbrook query checkout --since 1h`. If you already have an index with data, you can skip the demo and use your own index.
+With Docker Compose, run the CLI inside the container, for example `docker compose exec logbrook logbrook query checkout --since 1h`. To use your own data, set `QUERY_INDEX` to an existing index and skip the demo dataset.
 
 ### Load the demo dataset
 
-The expected results assume a fresh index. You need an ingestion token allowed to create it, a read token allowed to read it and the ingestion token's source, and a free index slot (`max_indexes` defaults to four, including `default`). Running the ingestion twice stores duplicates, so use a new index name each time.
+The expected results assume a fresh index. You need an ingestion token allowed to create it, a read token allowed to read it and the ingestion token's source, and a free index slot (`max_indexes` defaults to four, including `default`). Loading twice stores duplicates, so use a new index name each time.
 
 ```sh
 export LOGBROOK_INGEST_TOKEN='<your configured ingestion token>'
@@ -80,7 +80,7 @@ jq -n --argjson until "$QUERY_TO_MS" '
     --data-binary @-
 ```
 
-Expected response: `{"accepted":12}`. The timestamps run from 50 minutes to one minute before `QUERY_TO_MS`, which fits the default seven-day retention. A retention shorter than 50 minutes rejects the batch.
+The response is `{"accepted":12}`. The timestamps run from 50 minutes to one minute before `QUERY_TO_MS`, so a retention shorter than 50 minutes rejects the batch.
 
 | Fixture fields | Values |
 | --- | --- |
@@ -91,11 +91,11 @@ Expected response: `{"accepted":12}`. The timestamps run from 50 minutes to one 
 | Messages | Two contain lowercase `timeout`; one contains capitalized `Timeout` |
 | Custom attributes | `requestId`, and where applicable `statusCode`, `durationMs`, `orderId`, `userId`, `jobId` |
 
-The fixture sends Pino-style `time`, `msg`, `name` and `hostname`, which search returns as `event_time`, `message`, `logger` and `host`. Other fields go under `attributes`, so `requestId` becomes `attributes.requestId`. The `source` comes from the ingestion token, and the server assigns each event an `id` as a JSON string.
+The fixture sends Pino-style `time`, `msg`, `name` and `hostname`, which search returns as `event_time`, `message`, `logger` and `host`. Other fields go under `attributes`, so `requestId` becomes `attributes.requestId`.
 
 ### Define helpers
 
-Comparisons and pagination need fixed `[from, to)` bounds. Keep the demo's `QUERY_FROM_MS` and `QUERY_TO_MS`. For existing data, capture the last hour once with the same two `export` lines. Both are Unix milliseconds, and `from` is inclusive while `to` is exclusive.
+Repeatable counts and pagination need fixed bounds, so the helpers reuse the demo's `QUERY_FROM_MS` and `QUERY_TO_MS`. For your own data, capture the last hour once with the same two `export` lines.
 
 ```sh
 query_window() {
@@ -130,7 +130,7 @@ logbrook query "$QUERY_INDEX" --since 15m --limit 20
 logbrook query "$QUERY_INDEX" --since 1h --json
 ```
 
-Results are newest first. `--since` is measured from the moment each command runs, so use the fixed helpers when you need repeatable answers. See [search and filter](/query/search/).
+`--since` is measured from the moment each command runs, so the remaining recipes use the fixed helpers. See [search and filter](/query/search/).
 
 ## Recipe 2: Find warnings and errors
 
@@ -146,7 +146,7 @@ count_window --min-level 50 --json    # {"count":5}
 query_window --min-level 60
 ```
 
-The examples use Pino's level numbers: 40 warn, 50 error, 60 fatal. `--min-level 50` means `level >= 50`. There is no exact-level filter.
+The levels are Pino's: 40 warn, 50 error, 60 fatal. There is no exact-level filter.
 
 ## Recipe 3: Narrow by service, logger, host and source
 
@@ -164,7 +164,7 @@ query_window --service api --logger http --host api-1 --min-level 50
 query_window --service worker --logger jobs --min-level 50
 ```
 
-Filters combine with AND, and values are exact and case-sensitive: `--service api` does not match `api-worker` or `API`. Only `--source` takes a comma-separated list, meaning OR. The source names depend on your server configuration.
+Filters combine with AND, and values are exact and case-sensitive: `--service api` doesn't match `api-worker` or `API`. Only `--source` takes a comma-separated list, meaning OR.
 
 ## Recipe 4: Search messages literally
 
@@ -183,31 +183,23 @@ query_window --message 'rate limit 100% reached'
 
 # Combine text with other filters: demo has 1.
 query_window --service api --min-level 50 --message timeout
+
+# Count instead of reading: demo has 2.
+count_window --message ord-42
 ```
 
-`--message` is a literal substring. `%`, `_`, `*`, `|` and parentheses are ordinary characters.
+`%`, `_`, `*`, `|` and parentheses are ordinary characters.
 
-## Recipe 5: Count the full window
-
-```sh
-count_window                                 # Demo: 12
-count_window --service api                   # Demo: 9
-count_window --message ord-42                # Demo: 2
-count_window --service api --min-level 50    # Demo: 3
-```
-
-The server counts every matching event in the window, whatever the page size.
-
-## Recipe 6: Look up one request by attribute
+## Recipe 5: Look up one request by attribute
 
 ```sh
 query_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
 count_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
 ```
 
-Both find the one matching demo event (`payment declined order=ord-42`). Strings are case-sensitive, a number never matches a string, and missing or null attributes never match. See [attribute filters](/query/attribute-filters/).
+Both find the one matching demo event (`payment declined order=ord-42`). Matching is exact and typed: a number never matches a string. See [attribute filters](/query/attribute-filters/).
 
-## Recipe 7: Fetch the next page
+## Recipe 6: Fetch the next page
 
 ```sh
 page=$(query_window --limit 3 --json)
@@ -219,9 +211,9 @@ if [ -n "$cursor" ]; then
 fi
 ```
 
-The first demo page holds `req-012`, `req-011` and `req-010`, and the next holds `req-009`, `req-008` and `req-007`. Stop when `next_cursor` is null. Repeat the same index, bounds, filters and page size on every page, or the server returns `400`. See [pagination and export](/query/pagination-and-export/).
+The first demo page holds `req-012`, `req-011` and `req-010`, and the next holds `req-009`, `req-008` and `req-007`. Repeat the same index, bounds, filters and page size on every page, or the server returns `400`. See [pagination and export](/query/pagination-and-export/).
 
-## Recipe 8: Export every page as NDJSON
+## Recipe 7: Export every page as NDJSON
 
 This writes every page to `query-export.ndjson`, replacing any existing file. If a request fails, the loop exits nonzero and leaves a partial file. Delete it before retrying.
 
@@ -244,11 +236,11 @@ This writes every page to `query-export.ndjson`, replacing any existing file. If
 wc -l < query-export.ndjson              # Demo: 12
 ```
 
-The demo uses three events per page so you can see it paginate. For real exports use a larger page size, up to 1,000 by default.
+Three events per page is only there to show the loop paginating. For real exports use a larger page size, up to 1,000 by default.
 
-## Recipe 9: Do what the server cannot
+## Recipe 8: Do what the server can't
 
-Run these on the complete export from recipe 8, not on a single page.
+Run these on the complete export from recipe 7, not on a single page.
 
 ```sh
 # Exact error level, excluding fatal: demo has 4.
@@ -265,13 +257,6 @@ jq -c 'select(.message | contains("/health") | not)' query-export.ndjson
 
 # Numeric attribute: demo has 3 events taking at least one second.
 jq -c 'select((.attributes.durationMs // 0) >= 1000)' query-export.ndjson
-
-# JSON projection for another tool.
-jq -c '{id, event_time, service, message, requestId: .attributes.requestId}' query-export.ndjson
-
-# CSV projection, with a header and proper quoting.
-printf '%s\n' 'id,event_time,service,level,message'
-jq -r '[.id, .event_time, .service, .level, .message] | @csv' query-export.ndjson
 ```
 
 To group on the client, count slow requests per service:
@@ -282,9 +267,9 @@ jq -s 'map(select((.attributes.durationMs // 0) >= 1000))
   | map({service: .[0].service, slow_requests: length})' query-export.ndjson
 ```
 
-Demo result: `[{"service":"api","slow_requests":3}]`. `jq -s` loads the whole export into memory.
+The demo result is `[{"service":"api","slow_requests":3}]`. `jq -s` loads the whole export into memory. For JSON and CSV projections, see [pagination and export](/query/pagination-and-export/).
 
-## Recipe 10: Query over HTTP
+## Recipe 9: Query over HTTP
 
 ```sh
 # Service, severity and message together; demo has 1 event.
@@ -300,11 +285,11 @@ logs_get /count --data-urlencode 'service=api' \
   --data-urlencode 'min_level=50' | jq .
 ```
 
-The HTTP parameter is `min_level`, where the CLI option is `--min-level`. There is no `since` over HTTP.
+HTTP parameters use underscores (`min_level`), and there is no `since`.
 
-## Recipe 11: Discover services, hosts and levels
+## Recipe 10: Discover services, hosts and levels
 
-The CLI has no `facets` command, so this uses HTTP.
+Facets are HTTP only.
 
 ```sh
 logs_get /facets | jq '.services'
@@ -318,7 +303,7 @@ logs_get /facets --data-urlencode 'service=api' | jq '.hosts'
 
 Unfiltered, the demo's service facet is `api` 9, `worker` 2, `auth` 1. See [counts, facets and histograms](/query/aggregations/).
 
-## Recipe 12: Chart event volume
+## Recipe 11: Chart event volume
 
 ```sh
 # Five-minute buckets over the fixed hour.
@@ -335,7 +320,7 @@ logs_get /histogram --data-urlencode 'interval_ms=300000' |
 
 Empty buckets are omitted, so fill them with zeros when charting.
 
-## Recipe 13: Watch new events
+## Recipe 12: Watch new events
 
 Live tail is HTTP only. This command stays open until you press Ctrl-C:
 
@@ -356,11 +341,11 @@ jq -n '[{time: (now * 1000 | floor), level: 50, service: "api", msg: "live timeo
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-This adds a thirteenth event. Its time is after the fixed window's `to`, so the expected counts above do not change, though a later `--since` query can include it. For resume and gap handling, see [live tail](/query/live-tail/).
+This adds a thirteenth event after the fixed window's `to`, so the expected counts above don't change. For resume and gap handling, see [live tail](/query/live-tail/).
 
 ## Clean up
 
-To remove the demo index, run the following with an admin token. This permanently deletes it.
+Deleting the demo index needs an admin token and is permanent.
 
 ```sh
 logbrook indexes delete "$QUERY_INDEX" --yes

@@ -5,12 +5,11 @@ sidebar:
   order: 2
 ---
 
-You will run the published container image, send one event with curl, and search it with the CLI and with curl. Data lives in a throwaway container, so nothing persists after you stop it. For a persistent setup, use [Docker Compose](/get-started/docker-compose/).
+Run the published container image, send one event, and search it. Nothing persists after you remove the container; for a setup that keeps its data, use [Docker Compose](/get-started/docker-compose/).
 
 ## Prerequisites
 
-- Docker.
-- `curl` and `openssl` on the host.
+Docker, plus `curl` and `openssl` on the host.
 
 ## Run it
 
@@ -59,7 +58,7 @@ You will run the published container image, send one event with curl, and search
     `time` is a Unix timestamp in milliseconds, `level` is a nonnegative integer (30 is Pino's `info`), and `msg` is the message. Other fields, such as `orderId`, become attributes.
   </Step>
   <Step title="Search with the CLI">
-    The container already has the read token in its environment and reaches the server at its default address, so run the CLI inside it:
+    The container already has the read token in its environment, so run the CLI inside it:
 
     ```sh
     docker exec logbrook logbrook query payments --since 1h
@@ -68,7 +67,7 @@ You will run the published container image, send one event with curl, and search
     Add `--json` to see the complete record, including the `orderId` attribute.
   </Step>
   <Step title="Search with curl">
-    The same search over HTTP uses the read token. `from` (inclusive) and `to` (exclusive) are required Unix milliseconds. This asks for the last hour:
+    Over HTTP, pass the read token and a time range: `from` (inclusive) and `to` (exclusive) in Unix milliseconds. This asks for the last hour:
 
     ```sh
     now=$(( $(date +%s) * 1000 ))

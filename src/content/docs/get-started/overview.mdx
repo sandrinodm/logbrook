@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-Logbrook is a self-hosted log search server for structured application logs. This page explains what it does, how it stores data, and what it does not do.
+Logbrook is a self-hosted log search server for structured application logs. It runs on one server, as one executable with one data directory.
 
 ![Logbrook](../../../assets/logbrook-banner.webp)
 
@@ -15,7 +15,7 @@ Logbrook is at version 0.1.0. APIs and storage formats may change before a stabl
 
 ## What it does
 
-Logbrook is a single Rust executable. It receives JSON logs over HTTP, stores recent events in an embedded DuckDB database, moves older events into local Parquet files, and searches both through its CLI and HTTP API. It runs on one server with one data directory and needs no external database or message queue.
+Logbrook receives JSON logs over HTTP, stores recent events in an embedded DuckDB database, moves older events into local Parquet files, and searches both through its CLI and HTTP API. It needs no external database or message queue.
 
 ![Web apps, APIs, and workers send logs to Logbrook. Recent logs are stored in DuckDB and archived to Parquet files. The CLI and other apps send queries to Logbrook and receive results from both stores.](../../../assets/logbrook-architecture.webp)
 
@@ -23,7 +23,7 @@ Logbrook is a single Rust executable. It receives JSON logs over HTTP, stores re
 
 - **HTTP ingestion.** Applications send Pino-style JSON arrays or NDJSON with an ingestion token. Each token maps to a source. A request succeeds only after the batch is committed. See [Send logs over HTTP](/send-logs/http/).
 - **Named indexes.** Each index has its own retention period and disk-size target. The first authorized write to a new index creates it, up to a configurable limit. See [Indexes, services and sources](/concepts/indexes-services-sources/).
-- **Search.** Filter by time range, source, service, logger, host, minimum level, message substring and exact attribute values. Page through results with a cursor, and get counts, facets and histograms. See [Search and filter](/query/search/).
+- **Search.** Filter by time range, source, service, logger, host, minimum level, message substring and exact attribute values. Results are paged, and the same filters drive counts, facets and histograms. See [Search and filter](/query/search/).
 - **Live tail.** Follow new events over server-sent events, with replay after a reconnect and a notice when events were missed. See [Live tail](/query/live-tail/).
 - **Parquet archival.** Older events move to local Parquet files and stay searchable together with recent ones. See [Archives and retention](/concepts/archives-and-retention/).
 - **CLI.** The same executable is a client for a running server. See the [CLI reference](/reference/cli/).
@@ -32,19 +32,19 @@ Logbrook is a single Rust executable. It receives JSON logs over HTTP, stores re
 
 ## Credentials
 
-Logbrook has three roles, each with its own bearer token: ingestion (write events), read (search and tail), and an optional admin role for managing indexes. The roles must use different values. See [Credentials and roles](/configure/credentials/).
+Each role has its own bearer token: ingestion (write events), read (search and tail), and optionally admin (manage indexes). No two roles can share a token. See [Credentials and roles](/configure/credentials/).
 
 ## When it fits
 
 - You run one server, or a small group of services, and want to search structured logs without operating a database cluster or a queue.
 - Your applications can emit JSON, or you can forward their output with Fluent Forward.
-- You want to filter by fields rather than write queries.
+- Filtering by fields is enough, and you don't need a query language.
 
 ## What it does not do
 
-- It is a single node. There is no clustering or replication.
-- It has no query language. Searches use structured filters, not SQL, Lucene or KQL.
-- It serves plain HTTP. Put a TLS-terminating reverse proxy in front of it before exposing it beyond the local machine.
+- No clustering or replication. It is a single node.
+- No query language. Searches use structured filters, not SQL, Lucene or KQL.
+- No TLS on the HTTP API. It serves plain HTTP, so put a TLS-terminating reverse proxy in front of it before exposing it beyond the local machine.
 
 ## Next steps
 

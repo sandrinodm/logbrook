@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-You will build the `logbrook` executable from a checkout, run it in the foreground on `127.0.0.1:3100`, send an event, and search it. Run every command from the repository root.
+Build the `logbrook` executable from a checkout, run it on `127.0.0.1:3100`, send an event, and search it. Run every command from the repository root.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` 
     The first build compiles DuckDB from source and takes several minutes.
   </Step>
   <Step title="Start the server">
-    Generate separate ingestion and read credentials, print them for the second terminal, validate the configuration, and start the server.
+    Generate the two credentials, print them for the second terminal, validate the configuration, and start the server.
 
     ```sh
     export LOGBROOK_INGEST_TOKEN="$(openssl rand -hex 24)"
@@ -43,7 +43,7 @@ If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` 
     `serve` stays in the foreground and writes JSON logs to stderr. Press Ctrl-C to stop it. Without a configuration file, Logbrook listens on `127.0.0.1:3100`, stores data in `./data`, and keeps events for seven days with no disk-size target.
   </Step>
   <Step title="Send an event">
-    In a second terminal in the repository root, set the ingestion token from the previous step. This sends one event to an index named `payments`.
+    In a second terminal in the repository root, set the ingestion token and send one event to an index named `payments`.
 
     ```sh
     export LOGBROOK_INGEST_TOKEN='<ingest token from the first terminal>'
@@ -58,7 +58,7 @@ If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` 
     {"accepted":1}
     ```
 
-    The `payments` index did not exist, so this write also created it.
+    The first authorized write to a new index creates it.
   </Step>
   <Step title="Search">
     Set the read token, then query the index with the CLI:
@@ -83,7 +83,7 @@ target/release/logbrook --config logbrook.local.toml check-config
 target/release/logbrook --config logbrook.local.toml serve
 ```
 
-Git ignores `*.local.toml` files. Environment variables override the file, so unset the token variables from the steps above if you want the file's credentials to apply. See [the configuration file](/configure/configuration-file/).
+Git ignores `*.local.toml` files. Environment variables override the file, so unset the token variables from the steps above to use the file's credentials. See [the configuration file](/configure/configuration-file/).
 
 ## Next steps
 

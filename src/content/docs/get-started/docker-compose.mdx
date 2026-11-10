@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-You will set up a Compose deployment that keeps its data in a named volume, takes its credentials from a `.env` file, and runs with a hardened container. Use it when the [quickstart](/get-started/quickstart/) container is no longer enough.
+This Compose deployment keeps its data in a named volume, reads its credentials from a `.env` file, and runs in a hardened container. Use it once the throwaway [quickstart](/get-started/quickstart/) container is no longer enough.
 
 ## What you get
 
@@ -76,7 +76,7 @@ You will set up a Compose deployment that keeps its data in a named volume, take
     )
     ```
 
-    Compose reads `.env` from the project directory for variable substitution. The ingestion token can only write and the read token can only query, so do not swap them.
+    Compose reads `.env` from the project directory. The ingestion token can only write and the read token can only query, so don't swap them.
   </Step>
   <Step title="Start it">
     ```sh
@@ -127,7 +127,7 @@ Common variables, all with defaults in the template:
 | `LOGBROOK_ARCHIVE_AFTER_MS` | `86400000` | Event age before archiving to Parquet. |
 | `LOGBROOK_MAINTENANCE_INTERVAL_SECS` | `60` | Seconds between maintenance passes. |
 
-To add an admin token for index administration, put `LOGBROOK_ADMIN_TOKEN` in `.env`, uncomment its line in `compose.yaml`, and recreate the service. Compose passes only mapped variables, so the token in `.env` alone does nothing. Leave the line commented out when you have no admin token, because an empty token is invalid.
+To add an admin token for index administration, put `LOGBROOK_ADMIN_TOKEN` in `.env`, uncomment its line in `compose.yaml`, and recreate the service. Compose passes only mapped variables, so the token in `.env` alone does nothing. Keep the line commented out while you have no admin token: an empty token is invalid.
 
 For separate ingestion sources, scoped readers, or per-index policies, mount a TOML file instead. See [the configuration file](/configure/configuration-file/).
 

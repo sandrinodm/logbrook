@@ -17,7 +17,7 @@ Terms are in alphabetical order.
 
 **Attribute filter.** An exact-equality condition on a top-level attribute, passed as JSON in `--filter` or the `filter` parameter. See [attribute filters](/query/attribute-filters/).
 
-**Cursor.** An opaque token returned as `next_cursor` by a search. Sending it back fetches the next page of the same query. It is bound to the index, route style, time range, filters and page size. See [pagination and export](/query/pagination-and-export/).
+**Cursor.** An opaque token a search returns as `next_cursor`. Send it back to fetch the next page of the same query. It is bound to the index, route style, time range, filters and page size. See [pagination and export](/query/pagination-and-export/).
 
 **DuckDB.** The embedded database that stores recent events of each index. See [archives and retention](/concepts/archives-and-retention/).
 
@@ -27,7 +27,7 @@ Terms are in alphabetical order.
 
 **Facet.** A list of the most frequent values of a built-in field (service, logger, host, level or source) among matching events, with counts. Each facet holds at most 100 values. See [counts, facets and histograms](/query/aggregations/).
 
-**Forward.** The Fluent Forward protocol. Logbrook can run a Forward receiver so Fluent Forward clients such as Docker's `fluentd` logging driver can send logs without an HTTP client. See [forward listener](/configure/forward-listener/) and [Docker and Fluent Forward](/send-logs/docker-forward/).
+**Forward.** The Fluent Forward protocol. Logbrook's optional Forward receiver accepts logs from clients such as Docker's `fluentd` logging driver, Fluentd and Fluent Bit. See [forward listener](/configure/forward-listener/) and [Docker and Fluent Forward](/send-logs/docker-forward/).
 
 **Gap.** A live tail frame that ends the stream because the resume point has expired under retention, or an event exceeds the per-subscriber output limit. Search the retained history to fill it. See [live tail](/query/live-tail/).
 
@@ -55,7 +55,7 @@ Terms are in alphabetical order.
 
 **Read token.** A credential that searches, counts, aggregates and tails events. It can be limited to certain sources and indexes. See [credentials and roles](/configure/credentials/).
 
-**Received time.** When Logbrook received the event, in Unix milliseconds. Returned as `received_at`. It is later than the event time for delayed logs. See [events and time](/concepts/events-and-time/).
+**Received time.** When Logbrook received the event, in Unix milliseconds. Returned as `received_at`. See [events and time](/concepts/events-and-time/).
 
 **Retention.** How long an index keeps events, measured by event time, plus an optional size target. Raising retention does not bring back expired events. See [indexes and retention](/configure/indexes-and-retention/).
 
@@ -72,7 +72,7 @@ Terms are in alphabetical order.
 ## Next steps
 
 <CardGrid>
-  <LinkCard title="What is Logbrook" href="/get-started/overview/" description="The big picture." />
+  <LinkCard title="What is Logbrook" href="/get-started/overview/" description="What it does and when it fits." />
   <LinkCard title="Concepts" href="/concepts/events-and-time/" description="Events, time and indexes." />
   <LinkCard title="Search and filter" href="/query/search/" description="Start querying." />
 </CardGrid>

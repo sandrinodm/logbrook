@@ -5,15 +5,13 @@ sidebar:
   order: 4
 ---
 
-This page is the reference for the `[forward]` section of the Logbrook TOML file. It covers listeners, principals, routes, TLS, limits and the metrics the receiver exports. For a walkthrough, see [Docker and Fluent Forward](/send-logs/docker-forward/).
+The Fluent Forward receiver is off by default and configured only in the `[forward]` section of the TOML file. It has no `LOGBROOK_*` environment variables, though its secrets can come from an environment variable that the file names. HTTP tokens are still required, and Forward clients authenticate as separate principals. Settings apply on restart. For a walkthrough, see [Docker and Fluent Forward](/send-logs/docker-forward/).
 
-The Forward receiver is off by default and is configured only in TOML. There are no `LOGBROOK_*` environment variables for it; only its secrets can come from an environment variable that the file names. HTTP tokens are still required, and Forward clients authenticate as separate principals. Settings apply on restart.
-
-Run `logbrook --config <file> check-config` to validate a file. It rejects unknown keys, overlapping routes, unknown principals, undeclared indexes and limits that contradict each other.
+`logbrook --config <file> check-config` validates the file. It rejects unknown keys, overlapping routes, unknown principals, undeclared indexes and contradictory limits.
 
 ## How the pieces fit
 
-A minimal setup has three parts. All three are required when `enabled = true`.
+An enabled receiver needs at least one listener, one principal and one route.
 
 ```toml title="logbrook.toml"
 [indexes.application]
@@ -45,7 +43,7 @@ host = "application-host"
 - A **principal** is a named identity. It fixes the stored `source` and the indexes the client may write to.
 - A **route** matches a tag on a listener, sends the events to one index and picks how they are normalized.
 
-Nothing in a record can change its source or index. Routes and principals can name only indexes declared under `[indexes.<name>]`, or `default`. Declared indexes are created at startup and can't be deleted through the API. See [indexes and retention](/configure/indexes-and-retention/).
+Nothing in a record can change its source or index. Routes and principals can name only `default` or indexes declared under `[indexes.<name>]`. [Declared indexes](/configure/indexes-and-retention/) are created at startup and can't be deleted through the API.
 
 If a listener can't bind or its TLS material can't be loaded, startup fails and the HTTP API doesn't start.
 
@@ -55,7 +53,7 @@ These keys sit directly under `[forward]`.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `enabled` | boolean | `false` | Bind the listeners. When true you need at least one listener, principal and route. |
+| `enabled` | boolean | `false` | Bind the listeners. Needs at least one listener, principal and route. |
 | `listeners` | array of tables | none | Listening endpoints. Up to 64. |
 | `principals` | table of tables | none | Named identities, keyed by name. Up to 1,024. |
 | `routes` | array of tables | none | Tag-to-index routes. Up to 1,024. |
@@ -64,7 +62,7 @@ Enabling Forward also requires `storage.queue_capacity` of at least 2.
 
 ## Listeners
 
-Each `[[forward.listeners]]` entry sets one endpoint. Set exactly one of `bind` and `unix_path`.
+Each `[[forward.listeners]]` entry is one endpoint. Set exactly one of `bind` and `unix_path`.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -85,11 +83,11 @@ Each `[[forward.listeners]]` entry sets one endpoint. Set exactly one of `bind` 
 
 ### Unix sockets
 
-A socket's parent directory must be owned by the service user or root and not be world-writable. Logbrook won't bind over an existing path, even a stale socket. Check its owner and remove it yourself. Unix sockets can't use TLS, `mtls` or UDP heartbeats.
+A socket's parent directory must be owned by the service user or root and not be world-writable. Logbrook won't bind over an existing path, even a stale socket, so check its owner and remove it yourself. Unix sockets can't use TLS, `mtls` or UDP heartbeats.
 
 ### UDP heartbeats
 
-Heartbeats are off by default. If the sender uses them, set `udp_heartbeat = true`. A listener on a non-loopback address also needs `allow_peers`. The heartbeat answers only a single zero byte, at most 10 times per second per listener. Fluentd 1.20.1 defaults to `heartbeat_type transport`. For ACK-based TCP or TLS delivery, `heartbeat_type none` skips the separate probes and relies on the ACK timeout.
+If the sender uses UDP heartbeats, set `udp_heartbeat = true`. A listener on a non-loopback address also needs `allow_peers`. Logbrook answers only a single zero byte, at most 10 times per second per listener. Fluentd 1.20.1 defaults to `heartbeat_type transport`. For ACK-based TCP or TLS delivery, `heartbeat_type none` skips the separate probes and relies on the ACK timeout.
 
 ## Authentication
 
@@ -101,7 +99,7 @@ Heartbeats are off by default. If the sender uses them, set `udp_heartbeat = tru
 
 ### trusted_local
 
-There is no authentication. A `trusted_local` listener must set `principal`. On a non-loopback address it also needs `trusted_network = true`, because every host that can reach the port can write. Use it for a local Docker daemon on loopback, or for an isolated container network.
+No authentication: every host that can reach the port can write. The listener must set `principal`, and on a non-loopback address also `trusted_network = true`. Use it for a local Docker daemon on loopback or an isolated container network.
 
 ### shared_key
 
@@ -182,7 +180,7 @@ How these settings shape events is described in [Docker and Fluent Forward](/sen
 
 ## Limits and timeouts
 
-All limits are in the `[forward]` table. They don't change the HTTP limits. Sizes are in bytes and timeouts in milliseconds (1 to 3,600,000).
+These keys sit in the `[forward]` table and are separate from the HTTP limits. Sizes are in bytes and timeouts in milliseconds (1 to 3,600,000).
 
 | Key | Default | Allowed | Meaning |
 | --- | --- | --- | --- |
@@ -218,13 +216,13 @@ Two budgets must cover the largest frame, or startup fails:
 - `raw_budget_bytes` must be at least `3 * max_frame_bytes + 1024`, and at most 4 GiB - 1.
 - `decoded_budget_bytes` must be at least `2 * max_expanded_bytes + max_normalized_bytes`, and at most 4 GiB - 1.
 
-Each session decodes one envelope at a time. These budgets cover Forward's own buffers only. When you size a host, add DuckDB memory, TLS state and kernel socket buffers.
+Each session decodes one envelope at a time. The budgets cover only Forward's own buffers, so add DuckDB memory, TLS state and kernel socket buffers when you size a host.
 
 The gzip ratio limit can reject valid, very repetitive logs. If it does, raise `max_expansion_ratio` and rely on `max_expanded_bytes`. `max_normalized_bytes` counts the stored form, including JSON escaping, Base64 and typed encoding, so a small MessagePack record can exceed it.
 
 ## Writer queue share
 
-Forward shares each index's writer queue with HTTP and can use at most half of it. That is half of `storage.queue_bytes / max_indexes` and half of `storage.queue_capacity`. With the defaults that is 4 MiB and 8 queued requests.
+Forward shares each index's writer queue with HTTP and can use at most half of it: half of `storage.queue_bytes / max_indexes` and half of `storage.queue_capacity`. With the defaults that is 4 MiB and 8 queued requests.
 
 The queued size includes serialized attributes and per-event overhead, so it is larger than the wire size. The default `max_normalized_bytes` of 8 MiB is larger than the share.
 
@@ -239,7 +237,7 @@ On shutdown, Logbrook stops accepting envelopes, drops incomplete frames without
 
 ## Metrics
 
-`/metrics` exports these series with the `logbrook_forward_` prefix. Counters only grow while the process runs and start from zero on restart. See [health, readiness and metrics](/operate/monitoring/).
+`/metrics` exports these series with the `logbrook_forward_` prefix. Counters reset to zero on restart. See [health, readiness and metrics](/operate/monitoring/).
 
 | Metric | Type | Meaning |
 | --- | --- | --- |

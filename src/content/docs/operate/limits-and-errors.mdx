@@ -5,13 +5,11 @@ sidebar:
   order: 2
 ---
 
-Every limit has a default and can be changed in the configuration file. This page lists them with the setting that controls each one, and explains the error responses a client can see.
-
-Request, body memory, connection and tail limits are shared by all indexes. Most settings are TOML only; the table notes the exceptions. Changes apply on restart.
+Each limit below is listed with its default and the setting that controls it. Most settings are TOML only (the tables note the environment variables), and changes apply on restart. Request, body memory, connection and tail limits are shared by all indexes.
 
 ## Request limits
 
-These limits apply to HTTP ingestion. Settings are top-level TOML keys.
+These apply to HTTP ingestion. The settings are top-level TOML keys.
 
 | Limit | Default | Config key | When exceeded |
 | --- | --- | --- | --- |
@@ -46,6 +44,8 @@ The raw and decoded budgets limit memory held by request bodies. They do not cap
 | Page size | 1,000 events (default page 100) | `max_page_size` | `400` |
 | Histogram buckets | 2,000 | Fixed | `400` |
 | Attribute filter conditions | 16 | Fixed | `400` |
+| Sources named in one query | 128 | Fixed | `403` |
+| Request target (path and query) of a log `GET` | 32,768 bytes | Fixed | `400` |
 | Query deadline | 5 seconds | `storage.query_timeout_ms` (max 300 s) | `504` |
 | Query response bytes | 8 MiB | `storage.max_query_bytes` (max 64 MiB) | `413` |
 | Reader workers, per index | 2 | `storage.reader_threads` | Excess reads can get `429` |
@@ -74,7 +74,7 @@ A page can exceed the response byte limit even when `limit` is valid. Lower the 
 Byte targets must be at least 16 MiB. Retention must be longer than the archive age.
 
 <Aside type="caution" title="The disk target is not a hard limit">
-It is a retention target for measured file size. Maintenance deletes the oldest event-time groups once queries release their files. While an index stays at its target, ingestion returns `507`. DuckDB reuses freed blocks but does not shrink its database file. Use a filesystem quota if you need a hard ceiling.
+It is a retention target for the measured file size. Maintenance deletes the oldest event-time groups once queries release their files. While an index stays at its target, ingestion returns `507`. DuckDB reuses freed blocks but does not shrink its database file. Use a filesystem quota if you need a hard ceiling.
 </Aside>
 
 ## Retention on ingestion
@@ -85,7 +85,7 @@ Expired events disappear from queries immediately. An archive file is deleted on
 
 ## Error responses
 
-Errors are JSON objects of the form `{"error":"explanation"}`. The explanation is for people; do not parse it as an error code. The status code is the contract.
+Errors are JSON objects of the form `{"error":"explanation"}`. The explanation is for people. Rely on the status code, not the text.
 
 | Status | Meaning | What to do |
 | --- | --- | --- |
@@ -93,16 +93,15 @@ Errors are JSON objects of the form `{"error":"explanation"}`. The explanation i
 | `401` | Missing or invalid bearer credential, or a credential of the wrong role | Check the token and its role |
 | `403` | Source or index scope denial, non-admin deletion, or `/metrics` with a restricted token | Use a token with the right scope |
 | `404` | Unknown index or endpoint | Check the index name |
+| `405` | Known route, unsupported method | Fix the method |
 | `413` | Body, event, metadata or response size limit | Shrink the request or the result |
 | `429` | Capacity pressure. Includes `Retry-After: 1` | Retry with bounded backoff |
 | `503` | Storage unavailable, integrity failure, or shutdown | Check `/ready` and the logs |
 | `504` | Body receive deadline or query deadline | Retry; see below |
 | `507` | The index has reached its disk target | Free space or raise the target and restart |
 
-A known route called with an unsupported method can return `405`.
-
 <Aside type="caution" title="Retries can duplicate events">
-Logbrook has no idempotency keys. If a request times out, or the client disconnects, the batch may or may not have committed. A `504` after the body was admitted, or a dropped connection, leaves the outcome uncertain. Retrying a `429` is safe in that nothing was admitted, but retrying an uncertain request can store duplicates.
+Logbrook has no idempotency keys. After a `429`, nothing was admitted and a retry is safe. After a `504` once the body was admitted, or a dropped connection, the batch may or may not have committed, and a retry can store duplicates.
 </Aside>
 
 A `504` on a query leaves the reader worker busy until DuckDB stops the query. The metric `logbrook_storage_query_timeouts_total` counts them.

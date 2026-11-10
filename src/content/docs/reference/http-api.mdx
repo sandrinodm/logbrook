@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-This guide covers how the Logbrook HTTP API fits together: which routes exist, who may call them, what they return and how they fail. For every parameter and response schema, use the generated [API reference](/api/). The same contract is served by every running server at `GET /openapi.json`.
+An overview of the routes, who may call them, what they return and how they fail. The generated [API reference](/api/) lists every parameter and response schema, and each running server serves the same contract at `GET /openapi.json`.
 
 The examples assume `$LOGBROOK_URL` and a token in the matching environment variable.
 
@@ -30,11 +30,11 @@ Named routes address one index per request. The unprefixed routes address the `d
 | `GET /ready` | None | `200`, `{"status":"ready"}`, or `503` |
 | `GET /openapi.json` | None | `200`, OpenAPI JSON |
 
-The default-index routes are `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram` and `/logs/tail`. They follow the same credential rules. Use the named routes in new clients. Cursors and tail IDs from the two route styles are not interchangeable, even for `default`.
+The default-index routes are `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram` and `/logs/tail`. They follow the same credential rules. Use the named routes in new clients: cursors and tail IDs from the two route styles are not interchangeable, even for `default`.
 
 ## Authentication and roles
 
-Send `Authorization: Bearer <token>`. Each credential has exactly one role, and the roles do not overlap: an admin token cannot read or ingest events, and a read token cannot ingest. Tokens are 16 to 512 visible ASCII characters with no whitespace, and the server refuses to start with others.
+Send `Authorization: Bearer <token>`. Each credential has exactly one role: an admin token cannot read or ingest events, and a read token cannot ingest. Tokens are 16 to 512 visible ASCII characters with no whitespace, and the server refuses to start with others.
 
 | Role | Can do |
 | --- | --- |
@@ -120,7 +120,7 @@ A read token restricted to particular sources gets only `{"name":"checkout"}`. `
 
 ## Errors
 
-Errors are JSON objects: `{"error":"explanation"}`. The text is for people. Do not parse it as a code.
+Errors are JSON objects: `{"error":"explanation"}`. The text is for people, so rely on the status code.
 
 | Status | Meaning | Client action |
 | --- | --- | --- |
@@ -137,37 +137,17 @@ Errors are JSON objects: `{"error":"explanation"}`. The text is for people. Do n
 
 Retrying an ingestion after `429` or `504` can duplicate events.
 
-## Limits
+## Limits and health
 
-Operators can change each of these in the configuration. Request, body memory, connection and tail limits are shared by all indexes.
-
-| Limit | Default |
-| --- | --- |
-| Request body / single event | 1 MiB / 64 KiB |
-| Events per batch | 1,000 |
-| Field string or metadata key | 4 KiB |
-| JSON nesting depth | 16 |
-| Live retention / future skew | 7 days / 5 minutes |
-| Query span / page size / response bytes | 31 days / 1,000 events / 8 MiB |
-| Query deadline | 5 seconds |
-| Tail subscribers / output bytes per subscriber | 8 / 1 MiB |
-| Index count, including `default` | 4 |
-| Log GET request target (path and query) | 32,768 bytes |
-| Sources per query | 128 |
-
-See [limits and errors](/operate/limits-and-errors/).
-
-## Health, readiness and metrics
-
-`/health` is a public liveness check. `/ready` returns `503` with an error object when any index's storage is unavailable. It does not check free disk space. `/metrics` serves Prometheus text. See [health, readiness and metrics](/operate/monitoring/).
+Body, batch, query, tail and index-count limits are listed with their defaults in [limits and errors](/operate/limits-and-errors/). `/health`, `/ready` and `/metrics` are covered in [health, readiness and metrics](/operate/monitoring/).
 
 ## The OpenAPI contract
+
+`GET /openapi.json` needs no credential:
 
 ```sh
 curl --silent "$LOGBROOK_URL/openapi.json" | jq '.paths | keys'
 ```
-
-The generated [API reference](/api/) on this site is built from the same file.
 
 ## Next steps
 

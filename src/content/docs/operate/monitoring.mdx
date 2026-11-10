@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-Logbrook exposes a liveness endpoint, a readiness endpoint and a Prometheus metrics endpoint on the same port as the API. This page shows how to probe them, what each metric means and which ones are worth alerting on.
+Logbrook serves a liveness endpoint, a readiness endpoint and Prometheus metrics on the same port as the API.
 
 ## Health and readiness
 
@@ -15,9 +15,7 @@ Logbrook exposes a liveness endpoint, a readiness endpoint and a Prometheus metr
 | `GET /ready` | None | `200` `{"status":"ready"}` | `503` with an error object |
 | `GET /metrics` | Read token | `200`, Prometheus text | `401`, `403`, `429` |
 
-`/health` is a liveness check. `/ready` returns `503` when any index's storage is unavailable.
-
-Logbrook marks the server unready and shuts it down on integrity failures and broken database connections. Recoverable maintenance failures do not affect readiness: reads and ingestion keep working while maintenance retries with exponential backoff, up to 15 minutes between attempts.
+`/health` is a liveness check. `/ready` returns `503` when any index's storage is unavailable. On integrity failures and broken database connections, Logbrook marks the server unready and shuts it down. Recoverable maintenance failures do not affect readiness: reads and ingestion keep working while maintenance retries with exponential backoff, up to 15 minutes between attempts.
 
 <Aside type="caution" title="Readiness does not check disk space">
 `/ready` does not warn about low disk space. Watch free disk through your container or host monitoring.
@@ -155,7 +153,7 @@ These metrics are always present, and stay at zero when the [Forward listener](/
 
 ## What to alert on
 
-These alerts follow from what each metric measures. Pick thresholds from your own baseline.
+Pick thresholds from your own baseline.
 
 | Condition | Metric | Why |
 | --- | --- | --- |

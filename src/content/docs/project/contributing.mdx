@@ -5,8 +5,6 @@ sidebar:
   order: 1
 ---
 
-This page explains how to set up a development environment, which checks CI runs, and what a good pull request contains. The last section covers how to work on this documentation site.
-
 For a substantial feature or API change, [open an issue](https://github.com/sandrinodm/logbrook/issues) first to discuss the use case and approach. Report suspected security vulnerabilities privately; see [Security](/project/security/).
 
 ## Report a bug
@@ -21,9 +19,9 @@ Use a small synthetic log sample when you can. Remove tokens, personal data and 
 
 ## Set up a development environment
 
-Development uses the same pinned Rust toolchain as the server. Build prerequisites are in [Build from source](/get-started/build-from-source/). The Pino example uses Node.js and npm; CI uses Node.js 26.13.0.
+Build prerequisites, including the pinned Rust toolchain, are in [Build from source](/get-started/build-from-source/). The Pino example uses Node.js and npm; CI uses Node.js 26.13.0.
 
-Use a separate data directory for development. Tests and load generators write synthetic events, and some checks kill their own test servers on purpose. Keep them away from production data.
+Use a separate data directory for development. Tests and load generators write synthetic events, and some checks kill their own test servers on purpose.
 
 Code style:
 
@@ -38,7 +36,7 @@ npm --prefix examples/pino-logger run format
 
 ## Run the checks
 
-Run commands from the repository root. These are the Rust checks:
+Run the Rust checks from the repository root:
 
 ```sh
 cargo fmt --all --check
@@ -114,7 +112,7 @@ On Linux, use `--host 127.0.0.1 --network host`, as CI does. `--negative-control
 
 ## Developer tools (`cargo xtask`)
 
-`cargo xtask` runs the `logbrook-dev` package in `xtask/`. It is a separate workspace package, so none of its dependencies end up in the server executable or the image. Container checks need Docker.
+`cargo xtask` runs the `logbrook-dev` package in `xtask/`, a separate workspace package whose dependencies stay out of the server executable and the image. Container checks need Docker.
 
 | Command | Use |
 | --- | --- |
@@ -129,7 +127,7 @@ On Linux, use `--host 127.0.0.1 --network host`, as CI does. `--negative-control
 | `cargo xtask extended-load` | Longer container run with fixed CPU and memory limits |
 | `cargo xtask container-probe CONTAINER` | Reads cgroup counters from a running container |
 
-Every generator lists its options with `--help`. `mixed-load` writes to the server at `--url` (default `http://127.0.0.1:3100`), so point it at a server whose data you do not need. Write reports to `artifacts/`, which Git ignores. See [`xtask/README.md`](https://github.com/sandrinodm/logbrook/blob/main/xtask/README.md) for details.
+Every generator lists its options with `--help`. `mixed-load` writes to the server at `--url` (default `http://127.0.0.1:3100`), so point it at a server whose data you don't need. Write reports to `artifacts/`, which Git ignores. See [`xtask/README.md`](https://github.com/sandrinodm/logbrook/blob/main/xtask/README.md) for details.
 
 For container changes, build and verify a local image:
 
@@ -147,7 +145,7 @@ For performance changes, include the workload, resource limits, record sizes, co
 - Keep changes focused on one problem and explain the resulting behavior.
 - Include a regression test for a bug fix when practical. Prefer tests of observable behavior over implementation details.
 - Update affected documentation and examples.
-- List the checks you ran and anything they did not cover. For storage or API changes, explain compatibility and migration effects.
+- List the checks you ran and anything they didn't cover. For storage or API changes, explain compatibility and migration effects.
 - Keep lockfiles in sync with dependency changes. Exclude credentials, database files, build output and local experiment results.
 
 Logbrook is licensed under MIT. Contributions are accepted under the same license.
@@ -179,7 +177,7 @@ npx @cloudflare/nimbus-docs check
 
 The second `check` verifies links in the built site.
 
-Pushes and pull requests to `docs-site` run `.github/workflows/pages.yml`, which checks and builds the site. Pushes also deploy to GitHub Pages. You can run the workflow by hand from the Actions tab to pick up a new API spec from `main`.
+Pushes and pull requests to `docs-site` run `.github/workflows/pages.yml`, which checks and builds the site. Pushes also deploy to GitHub Pages. To pick up a new API spec from `main` without a push, re-run the latest deploy run from the Actions tab.
 
 ## Next steps
 

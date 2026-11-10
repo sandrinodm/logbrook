@@ -6,7 +6,7 @@ sidebar:
   label: Home
 ---
 
-Logbrook is a self-hosted log search server for structured application logs. It is a single Rust executable that receives JSON logs over HTTP, stores them in embedded DuckDB and local Parquet files, and searches them through a CLI and an HTTP API.
+Logbrook is a self-hosted log search server for structured application logs. One Rust executable receives JSON logs over HTTP, stores them in embedded DuckDB and local Parquet files, and searches them through a CLI and an HTTP API.
 
 ![Logbrook](../../assets/logbrook-banner.webp)
 
@@ -32,11 +32,11 @@ docker run --rm -p 127.0.0.1:3100:3100 \
 
 ## How it works
 
-Applications send logs to Logbrook over HTTP. Each index keeps recent events in embedded DuckDB and moves older events into local Parquet archives. Searches read both stores, so archived events stay searchable. The CLI and other applications query through the same HTTP API.
+Each index keeps recent events in DuckDB and moves older ones into Parquet archives. Searches read both stores, so archived events stay searchable.
 
 ![Web apps, APIs, and workers send logs to Logbrook. Recent logs are stored in DuckDB and archived to Parquet files. The CLI and other apps send queries to Logbrook and receive results from both stores.](../../assets/logbrook-architecture.webp)
 
-Logbrook runs on one server with one data directory. It needs no external database or message queue.
+Logbrook runs on one server with one data directory, and needs no external database or message queue.
 
 ## Features
 
@@ -48,7 +48,7 @@ Logbrook runs on one server with one data directory. It needs no external databa
     Each index has its own retention period and disk-size target. [Learn more](/concepts/indexes-services-sources/).
   </Card>
   <Card title="Search, facets, histograms" icon="ph:magnifying-glass">
-    Filter by time, source, service, level, message and attributes. Count, group and bucket the results. [Learn more](/query/search/).
+    Filter by time, source, service, level, message and attributes, then count, group or bucket the results. [Learn more](/query/search/).
   </Card>
   <Card title="Live tail" icon="ph:broadcast">
     Stream new events over server-sent events, with replay after a reconnect. [Learn more](/query/live-tail/).
@@ -79,38 +79,3 @@ Logbrook runs on one server with one data directory. It needs no external databa
   <LinkCard title="Reference" description="CLI, HTTP API and glossary." href="/reference/cli/" />
   <LinkCard title="AI agents" description="Install and use the Logbrook agent skill." href="/ai-agents/agent-skill/" />
 </CardGrid>
-
-## FAQ
-
-<AccordionGroup>
-  <Accordion>
-    <AccordionTrigger>Is Logbrook production ready?</AccordionTrigger>
-    <AccordionContent>
-      Not yet. It is pre-release software at version 0.1.0, and APIs and storage formats may change before a stable release. See [Run in production](/operate/production/) for what to plan for.
-    </AccordionContent>
-  </Accordion>
-  <Accordion>
-    <AccordionTrigger>What does it need to run?</AccordionTrigger>
-    <AccordionContent>
-      One executable and one writable data directory. There is no external database or message queue. Logbrook serves plain HTTP, so put a TLS-terminating reverse proxy in front of it before exposing it beyond the local machine.
-    </AccordionContent>
-  </Accordion>
-  <Accordion>
-    <AccordionTrigger>How do I get logs in?</AccordionTrigger>
-    <AccordionContent>
-      Post JSON arrays or NDJSON to the ingest endpoint with an ingestion token. See [Send logs over HTTP](/send-logs/http/) and [Node.js with Pino](/send-logs/pino/). Docker's fluentd logging driver, Fluentd and Fluent Bit can use the optional [Forward receiver](/send-logs/docker-forward/), and you can [import log files](/send-logs/import-files/) offline.
-    </AccordionContent>
-  </Accordion>
-  <Accordion>
-    <AccordionTrigger>What query language does it use?</AccordionTrigger>
-    <AccordionContent>
-      None. You search with structured filters: a time range, source, service, logger, host, minimum level, message substring, and exact attribute values. There is no SQL, Lucene or KQL. See [Search and filter](/query/search/).
-    </AccordionContent>
-  </Accordion>
-  <Accordion>
-    <AccordionTrigger>What happens to old logs?</AccordionTrigger>
-    <AccordionContent>
-      Events older than the archive age move into Parquet files and stay searchable. Events past the index's retention period, or beyond its disk-size target, are expired oldest first. See [Archives and retention](/concepts/archives-and-retention/).
-    </AccordionContent>
-  </Accordion>
-</AccordionGroup>

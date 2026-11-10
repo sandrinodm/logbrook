@@ -5,7 +5,7 @@ sidebar:
   order: 5
 ---
 
-Live tail streams events as they are ingested, over HTTP Server-Sent Events (SSE). The stream is HTTP only. The `logbrook` CLI has no `tail` command, so use `curl` or an SSE client.
+Live tail streams events as they are ingested, over Server-Sent Events (SSE). It's HTTP only: the `logbrook` CLI has no `tail` command, so use `curl` or an SSE client.
 
 ## Start a tail
 
@@ -16,7 +16,7 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
   --data-urlencode 'service=api' --data-urlencode 'min_level=50'
 ```
 
-The connection stays open until you interrupt it. Without a resume header, tail starts at the newest committed event and sends only events ingested after that. It does not replay history. Use [search](/query/search/) for history.
+The connection stays open until you interrupt it. Without a resume header, tail starts after the newest committed event and doesn't replay history. For that, use [search](/query/search/).
 
 Send an event from a second terminal to see frames like these:
 
@@ -37,7 +37,7 @@ data: caught up
 | `gap` | The stream ended because events cannot be replayed. See below. |
 | `error` | The stream ended because the tail query failed. |
 
-Keepalive comments can appear between frames. On the `/indexes/{index}/logs/tail` route, IDs start with the index name. IDs from the unprefixed `/logs/tail` route have no index prefix.
+Keepalive comments can appear between frames. IDs from `/indexes/{index}/logs/tail` start with the index name. IDs from the unprefixed `/logs/tail` route don't.
 
 ## Filter the stream
 
@@ -45,7 +45,7 @@ Tail accepts `source`, `service`, `logger`, `host`, `message`, `min_level` and `
 
 ## Ordering
 
-Tail follows ingestion order, not event time. An event that arrives late with an older `event_time` appears after newer ones.
+Tail follows ingestion order, not event time. An event that arrives late with an older `event_time` appears after newer ones. [Search and live tail](/concepts/search-and-tail/) explains why.
 
 ## Resume after a disconnect
 
@@ -60,21 +60,21 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
   --data-urlencode 'service=api' --data-urlencode 'min_level=50'
 ```
 
-The server replays matching events still retained after that point, then follows new ones. Rules:
+The server replays matching events still retained after that point, then follows new ones.
 
 - Use the same index, route style and filters. A resume ID with different filters returns `400` before the stream starts.
 - Send the ID unchanged, including any index prefix.
-- It is not a search `next_cursor` and not the event's own JSON `id`.
+- A search `next_cursor` or an event's JSON `id` is not a resume ID.
 
-The server does not reconnect for you, and neither does `curl`. Store IDs and reconnect in your client.
+Neither the server nor `curl` reconnects for you. Store IDs and reconnect in your client.
 
 ## Gaps
 
-A `gap` frame ends the stream. It means the resume point has expired under retention, or the next event is larger than the per-subscriber output limit. Resuming again cannot recover expired events. Search the retained history to fill the hole, then start a new tail.
+A `gap` frame ends the stream. It means the resume point has expired under retention, or the next event is larger than the per-subscriber output limit. Resuming can't recover expired events, so search the retained history for the period you missed, then start a new tail.
 
-An `error` frame also ends the stream. Reconnect or search the retained history.
+An `error` frame also ends the stream. Reconnect, or search the retained history.
 
-A long replay does not cause a gap by itself. If the very first event to replay exceeds the output limit, the request fails with `413` before streaming starts.
+A long replay doesn't cause a gap by itself. If the first event to replay exceeds the output limit, the request fails with `413` before streaming starts.
 
 ## Limits
 

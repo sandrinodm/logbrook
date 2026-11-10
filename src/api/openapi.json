@@ -7,6 +7,8 @@
   "paths": {
     "/logs": {
       "get": {
+        "summary": "Search the default index",
+        "description": "Returns matching events, newest first by event time.",
         "security": [
           {
             "bearerAuth": []
@@ -35,7 +37,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -98,7 +100,7 @@
             "name": "cursor",
             "in": "query",
             "required": false,
-            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route; search also binds original time bounds and effective limit. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens.",
+            "description": "`next_cursor` from the previous page, at most 1024 bytes. Send it with the same index, range, filters and limit; anything else returns `400`.",
             "schema": {
               "type": "string",
               "maxLength": 1024
@@ -108,7 +110,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -213,6 +215,8 @@
     },
     "/logs/count": {
       "get": {
+        "summary": "Count events in the default index",
+        "description": "Returns the number of matching events.",
         "security": [
           {
             "bearerAuth": []
@@ -241,7 +245,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -295,7 +299,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -400,6 +404,8 @@
     },
     "/logs/facets": {
       "get": {
+        "summary": "Facets for the default index",
+        "description": "Returns value counts per field for the matching events.",
         "security": [
           {
             "bearerAuth": []
@@ -428,7 +434,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -482,7 +488,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -587,6 +593,8 @@
     },
     "/logs/histogram": {
       "get": {
+        "summary": "Histogram for the default index",
+        "description": "Returns the number of matching events per time bucket.",
         "security": [
           {
             "bearerAuth": []
@@ -615,7 +623,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -678,7 +686,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -783,6 +791,8 @@
     },
     "/logs/ingest": {
       "post": {
+        "summary": "Ingest into the default index",
+        "description": "The batch is atomic: every event is stored or none is. Event times must fall between now minus the retention period and now plus the allowed future skew (five minutes by default). Producer fields that Logbrook doesn't map are kept in `attributes`.",
         "security": [
           {
             "bearerAuth": []
@@ -871,7 +881,7 @@
             }
           },
           "507": {
-            "description": "Index physical size budget exhausted; oldest retained history may be reclaimed before subsequent admission.",
+            "description": "The index's disk-size budget is exhausted. The oldest history may be reclaimed before later requests are accepted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -881,7 +891,6 @@
             }
           }
         },
-        "description": "Atomic live ingestion: event timestamps must lie between now minus configured retention and now plus configured maximum future skew (default five minutes). Every unconsumed producer key is preserved in attributes, including canonical-name collisions.",
         "requestBody": {
           "required": true,
           "content": {
@@ -906,6 +915,7 @@
     },
     "/health": {
       "get": {
+        "summary": "Liveness check",
         "security": [],
         "parameters": [],
         "responses": {
@@ -994,6 +1004,7 @@
     },
     "/ready": {
       "get": {
+        "summary": "Readiness check",
         "security": [],
         "parameters": [],
         "responses": {
@@ -1082,6 +1093,8 @@
     },
     "/metrics": {
       "get": {
+        "summary": "Prometheus metrics",
+        "description": "Requires a read token with no source or index restriction. Scoped tokens get `403`.",
         "security": [
           {
             "bearerAuth": []
@@ -1089,7 +1102,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Prometheus HELP/TYPE counters, gauges, endpoint latency histograms, and storage operational metrics",
+            "description": "Prometheus text format",
             "content": {
               "text/plain": {
                 "schema": {
@@ -1107,18 +1120,18 @@
           "429": {
             "description": "HTTP or metrics diagnostics capacity exhausted; Retry-After: 1"
           }
-        },
-        "description": "Global operational metrics require an unrestricted read token; source-scoped read credentials receive 403. Token must be unrestricted across both sources and indices. Storage diagnostics include bounded index labels."
+        }
       }
     },
     "/logs/tail": {
       "get": {
+        "summary": "Tail the default index",
+        "description": "Streams events as Server-Sent Events, in ingestion order. Without `Last-Event-ID` the stream starts after the newest committed event; with it, retained events after that ID are replayed first.\n\n`log` frames carry one event. A `cursor` frame means the stream has caught up. `gap` and `error` frames end the stream; after a `gap`, search the retained history before you reconnect.\n\nFrame IDs are opaque resume tokens bound to the route and filters. They aren't interchangeable with `next_cursor` values or event `id`s.",
         "security": [
           {
             "bearerAuth": []
           }
         ],
-        "description": "Bounded sequence-based SSE. Without Last-Event-ID starts at current committed highwater. Includes late arrivals. log frames contain canonical Event JSON and id; cursor frames advance id when caught up. gap/error frames terminate stream: reconcile retained history before reconnecting. Expired resume IDs emit a terminal gap; retention expiry conservatively invalidates IDs below the highest removed ingestion ID across all sources. Slow subscribers cannot block ingestion. SSE IDs are opaque versioned tokens bound to normalized filters and route, distinct from search cursors and decimal event JSON IDs. Changed-filter resumes and legacy numeric IDs return 400 before streaming. All query filters are applied on the server before output buffering. Retained replay pages drain immediately; backlog length alone never emits a gap. Each subscriber has a configured outbound byte budget; an oversized retained/imported event returns 413 before streaming starts or emits a terminal gap once streaming has started. Commit notifications wake live subscribers with periodic polling as fallback.",
         "parameters": [
           {
             "in": "query",
@@ -1136,7 +1149,7 @@
               "pattern": "^v1\\.[A-Za-z0-9_-]+$",
               "maxLength": 1024
             },
-            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens."
+            "description": "ID of the last frame you processed, at most 1024 bytes. Send it on the same route with the same filters; anything else returns `400`. An event's JSON `id` is not a resume ID."
           },
           {
             "name": "service",
@@ -1187,7 +1200,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1240,6 +1253,7 @@
     },
     "/openapi.json": {
       "get": {
+        "summary": "OpenAPI document",
         "responses": {
           "200": {
             "description": "This OpenAPI schema",
@@ -1256,6 +1270,8 @@
     },
     "/indexes/{index}/logs": {
       "get": {
+        "summary": "Search an index",
+        "description": "Returns matching events, newest first by event time. `next_cursor` is bound to this index and query.",
         "security": [
           {
             "bearerAuth": []
@@ -1266,7 +1282,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -1296,7 +1312,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -1359,7 +1375,7 @@
             "name": "cursor",
             "in": "query",
             "required": false,
-            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route; search also binds original time bounds and effective limit. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens.",
+            "description": "`next_cursor` from the previous page, at most 1024 bytes. Send it with the same index, range, filters and limit; anything else returns `400`.",
             "schema": {
               "type": "string",
               "maxLength": 1024
@@ -1369,7 +1385,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1479,12 +1495,13 @@
               }
             }
           }
-        },
-        "description": "Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices."
+        }
       }
     },
     "/indexes/{index}/logs/count": {
       "get": {
+        "summary": "Count events",
+        "description": "Returns the number of matching events.",
         "security": [
           {
             "bearerAuth": []
@@ -1495,7 +1512,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -1525,7 +1542,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -1579,7 +1596,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1689,12 +1706,13 @@
               }
             }
           }
-        },
-        "description": "Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices."
+        }
       }
     },
     "/indexes/{index}/logs/facets": {
       "get": {
+        "summary": "Facets",
+        "description": "Returns value counts per field for the matching events.",
         "security": [
           {
             "bearerAuth": []
@@ -1705,7 +1723,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -1735,7 +1753,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -1789,7 +1807,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1899,12 +1917,13 @@
               }
             }
           }
-        },
-        "description": "Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices."
+        }
       }
     },
     "/indexes/{index}/logs/histogram": {
       "get": {
+        "summary": "Histogram",
+        "description": "Returns the number of matching events per time bucket.",
         "security": [
           {
             "bearerAuth": []
@@ -1915,7 +1934,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -1945,7 +1964,7 @@
             "name": "source",
             "in": "query",
             "required": false,
-            "description": "Comma-separated authenticated source scope; omitted means token scope, empty configured scope is unrestricted",
+            "description": "Comma-separated sources. Defaults to every source the token can read.",
             "schema": {
               "type": "string"
             }
@@ -2008,7 +2027,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2118,12 +2137,13 @@
               }
             }
           }
-        },
-        "description": "Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices."
+        }
       }
     },
     "/indexes/{index}/logs/ingest": {
       "post": {
+        "summary": "Ingest events",
+        "description": "The batch is atomic: every event is stored or none is. Event times must fall between now minus the retention period and now plus the allowed future skew (five minutes by default). Producer fields that Logbrook doesn't map are kept in `attributes`. The first authorized write to a missing index creates it, up to `max_indexes`.",
         "security": [
           {
             "bearerAuth": []
@@ -2134,7 +2154,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2235,7 +2255,7 @@
             }
           },
           "507": {
-            "description": "Index physical size budget exhausted; oldest retained history may be reclaimed before subsequent admission.",
+            "description": "The index's disk-size budget is exhausted. The oldest history may be reclaimed before later requests are accepted.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2245,7 +2265,6 @@
             }
           }
         },
-        "description": "Atomic live ingestion: event timestamps must lie between now minus configured retention and now plus configured maximum future skew (default five minutes). Every unconsumed producer key is preserved in attributes, including canonical-name collisions. Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2270,18 +2289,19 @@
     },
     "/indexes/{index}/logs/tail": {
       "get": {
+        "summary": "Tail an index",
+        "description": "Streams events as Server-Sent Events, in ingestion order. Without `Last-Event-ID` the stream starts after the newest committed event; with it, retained events after that ID are replayed first.\n\n`log` frames carry one event. A `cursor` frame means the stream has caught up. `gap` and `error` frames end the stream; after a `gap`, search the retained history before you reconnect.\n\nFrame IDs are opaque resume tokens bound to the route and filters. They aren't interchangeable with `next_cursor` values or event `id`s.",
         "security": [
           {
             "bearerAuth": []
           }
         ],
-        "description": "Bounded sequence-based SSE. Without Last-Event-ID starts at current committed highwater. Includes late arrivals. log frames contain canonical Event JSON and id; cursor frames advance id when caught up. gap/error frames terminate stream: reconcile retained history before reconnecting. Expired resume IDs emit a terminal gap; retention expiry conservatively invalidates IDs below the highest removed ingestion ID across all sources. Slow subscribers cannot block ingestion. IDs are opaque index-prefixed strings, distinct from opaque search cursors. All query filters are applied on the server before output buffering. Retained replay pages drain immediately; backlog length alone never emits a gap. Each subscriber has a configured outbound byte budget; an oversized retained/imported event returns 413 before streaming starts or emits a terminal gap once streaming has started. Commit notifications wake live subscribers with periodic polling as fallback. Named route cursors and SSE Last-Event-ID are opaque and bound to this index. Authenticated ingestion may create a missing index within max_indexes; reads never create indices. SSE frame IDs and Last-Event-ID are opaque versioned query-bound tokens with an index prefix; event JSON id remains a decimal string. Changed filters or legacy numeric resume tokens return 400 before streaming.",
         "parameters": [
           {
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2305,7 +2325,7 @@
               "pattern": "^[a-z0-9][a-z0-9_-]*:v1\\.[A-Za-z0-9_-]+$",
               "maxLength": 1024
             },
-            "description": "Opaque versioned query-bound token, maximum 1024 bytes including index prefix. Reuse identical normalized filters and index/route. Legacy tokens and query mismatches return 400. Event JSON IDs are not resume tokens."
+            "description": "ID of the last frame you processed, at most 1024 bytes. Send it on the same route with the same filters; anything else returns `400`. An event's JSON `id` is not a resume ID."
           },
           {
             "name": "service",
@@ -2356,7 +2376,7 @@
             "name": "filter",
             "in": "query",
             "required": false,
-            "description": "URL-encoded JSON; 4096 decoded UTF-8 bytes maximum. Literal top-level typed equality, AND across conditions and built-in filters. All conditions apply before paging/aggregation. Missing/null values do not match. Duplicate/unknown members and conflicting conditions return 400. Raw path plus query limited to 32768 bytes.",
+            "description": "URL-encoded JSON, at most 4096 bytes decoded. Exact, typed matches on top-level attributes; every condition must match, along with the other filters. Missing and null values never match. Duplicate or unknown members and conflicting conditions return `400`. The request path and query together are limited to 32768 bytes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2419,12 +2439,13 @@
     },
     "/indexes": {
       "get": {
+        "summary": "List indexes",
+        "description": "Lists the indexes the token can read. An admin token sees every index. Source-scoped read tokens get names only; other callers also get file sizes and retention policy.",
         "security": [
           {
             "bearerAuth": []
           }
         ],
-        "description": "List existing indexes authorized by a read token index scope, or all indexes with an admin token. Source-scoped read tokens receive names only. Other authorized callers receive measured file sizes and policy.",
         "responses": {
           "200": {
             "description": "Authorized indices",
@@ -2461,6 +2482,8 @@
     },
     "/indexes/{index}": {
       "put": {
+        "summary": "Create an index",
+        "description": "Creates the index with the configured policy, or returns it if it already exists. Requires an admin token, or an ingestion token scoped to the index. `max_indexes` caps how many can exist.",
         "security": [
           {
             "bearerAuth": []
@@ -2471,7 +2494,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2480,7 +2503,6 @@
             }
           }
         ],
-        "description": "Create an index using the configured policy. Requires an admin token, or ingestion token with index scope. Idempotently returns an existing index; global max_indexes bounds creation.",
         "responses": {
           "200": {
             "description": "Index exists",
@@ -2512,6 +2534,8 @@
         }
       },
       "get": {
+        "summary": "Get an index",
+        "description": "Source-scoped read tokens get the name only; other callers also get file sizes and retention policy.",
         "security": [
           {
             "bearerAuth": []
@@ -2522,7 +2546,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2531,7 +2555,6 @@
             }
           }
         ],
-        "description": "Inspect an existing index. A read token must permit the index; an admin token permits every index. Source-scoped readers receive only the name. Other authorized callers receive fresh file sizes and effective retention policy.",
         "responses": {
           "200": {
             "description": "Index information",
@@ -2561,6 +2584,8 @@
         }
       },
       "delete": {
+        "summary": "Delete an index",
+        "description": "Permanently deletes a dynamically created index and its events. Requires the admin token. The `default` index and indexes declared in the server configuration can't be deleted. Once accepted, the deletion finishes even if the client disconnects. A later ingest to the same name recreates the index, so stop producers first.",
         "security": [
           {
             "bearerAuth": []
@@ -2571,7 +2596,7 @@
             "name": "index",
             "in": "path",
             "required": true,
-            "description": "Named index; lowercase letters, digits, underscores and hyphens. Index token scope applies in addition to source scope.",
+            "description": "Index name: lowercase letters, digits, underscores and hyphens. The token's index scope applies as well as its source scope.",
             "schema": {
               "type": "string",
               "minLength": 1,
@@ -2580,7 +2605,6 @@
             }
           }
         ],
-        "description": "Permanently delete a dynamic index and its events. Requires a separate admin token. The default index and indexes declared in server configuration are protected. An admitted deletion drains native workers and finishes independently of client disconnection. Producers can recreate a deleted index on subsequent ingestion; stop producers first when removing an index permanently.",
         "responses": {
           "200": {
             "description": "Index deleted",
@@ -2899,7 +2923,7 @@
         "required": [
           "name"
         ],
-        "description": "Name is always included. Fresh physical file sizes, policy and readiness are included for admin tokens and readers unrestricted by source. Source-scoped readers receive only the name. Measurements can change during concurrent activity and count logical file lengths, not allocated filesystem blocks.",
+        "description": "`name` is always present. The other fields are omitted for source-scoped read tokens. Sizes are logical file lengths measured at request time, not allocated disk blocks.",
         "properties": {
           "name": {
             "type": "string"
@@ -2975,7 +2999,7 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 256,
-                  "description": "Literal immediate attribute key; 1\u2013256 UTF-8 bytes, also subject to configured field limit. No nested path syntax."
+                  "description": "Top-level attribute key, 1\u2013256 bytes and within the configured field limit. Nested paths aren't supported."
                 },
                 "op": {
                   "type": "string",
@@ -2994,7 +3018,7 @@
                       "type": "boolean"
                     }
                   ],
-                  "description": "Typed equality. String limit is 1024 UTF-8 bytes; numeric token limit 128 bytes. Null/objects/arrays are invalid. Integers remain exact through i64/u64; decimal/exponent values use finite binary64 stored-value precision."
+                  "description": "Value to match exactly. Strings up to 1024 bytes, numbers up to 128 bytes as written. Null, objects and arrays are rejected. Integers compare exactly across the i64 and u64 ranges; decimals compare as 64-bit floats."
                 }
               }
             }

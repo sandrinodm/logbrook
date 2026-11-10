@@ -5,23 +5,23 @@ sidebar:
   order: 3
 ---
 
-This page shows how to cap the number of indexes, how indexes get created, and how to set retention and disk-size targets globally and per index. For the reasoning behind these behaviors, read [archives, retention and backups](/concepts/archives-and-retention/).
+Every index inherits a global retention period and disk-size target, and `[indexes.<name>]` tables override them per index. [Archives, retention and backups](/concepts/archives-and-retention/) explains how archival and expiry work.
 
 ## Index limits
 
-`max_indexes` is the most indexes the server will hold, including `default`. The built-in value is 4.
+`max_indexes` caps the number of indexes, including `default`. The default is 4 and the range is 1 to 64.
 
 ```toml title="logbrook.toml"
 max_indexes = 8
 ```
 
-Env: `LOGBROOK_MAX_INDEXES`. The range is 1 to 64. At startup, Logbrook counts the `default` index, every `[indexes.<name>]` table and `LOGBROOK_INDEXES` name you declared, and the index directories already on disk, and refuses to start if that exceeds the limit.
+Env: `LOGBROOK_MAX_INDEXES`. At startup, Logbrook counts the `default` index, every `[indexes.<name>]` table and `LOGBROOK_INDEXES` name, and the index directories already on disk. It refuses to start if the total exceeds the limit.
 
-When the limit is reached, a request that would create another index fails with `429` and the message `maximum index count reached; increase max_indexes and restart`. Raise the limit and restart, or delete an index you no longer need.
+At the limit, a request that would create another index fails with `429` and `maximum index count reached; increase max_indexes and restart`. Raise the limit and restart, or delete an index.
 
 ### The limit also splits memory
 
-DuckDB memory, DuckDB spill space and the ingestion queue byte budget are process-wide totals divided by `max_indexes`. Unused slots still hold their share, so creating an index does not add memory.
+DuckDB memory, DuckDB spill space and the ingestion queue byte budget are process-wide totals divided by `max_indexes`. Unused slots keep their share, so creating an index doesn't add memory.
 
 | Setting | Default total | Per slot with `max_indexes = 4` |
 | --- | --- | --- |
@@ -29,16 +29,16 @@ DuckDB memory, DuckDB spill space and the ingestion queue byte budget are proces
 | `storage.temp_limit` | 2 GB | 500 MB |
 | `storage.queue_bytes` | 32 MiB | 8 MiB |
 
-Reader and DuckDB thread settings apply per index, so each index adds threads and connections. For a single-index deployment, set `max_indexes = 1`. If you raise the limit, raise the totals too.
+Thread settings apply per index, so each index adds threads and connections. For a single-index deployment, set `max_indexes = 1`. If you raise the limit, raise the totals too.
 
 ## Create indexes
 
-You do not have to create an index in advance. These all work:
+An index can be created in four ways:
 
 - **First authorized write.** An ingestion request to `POST /indexes/payments/logs/ingest` creates `payments` if the token is allowed to write there. Reads never create an index.
-- **Explicit creation.** `logbrook indexes create payments`, or `PUT /indexes/payments`. It is idempotent. An ingestion token or an admin token can do it.
-- **Declare it in TOML.** An `[indexes.payments]` table creates it at startup, even if the table is empty.
-- **Declare it in the environment.** `LOGBROOK_INDEXES=payments,audit` creates those indexes at startup. Existing tables keep their policies. Empty entries are ignored and whitespace is not trimmed.
+- **Explicit creation.** `logbrook indexes create payments` or `PUT /indexes/payments`, with an ingestion or admin token. It is idempotent.
+- **TOML.** An `[indexes.payments]` table creates it at startup, even if the table is empty.
+- **Environment.** `LOGBROOK_INDEXES=payments,audit` creates those indexes at startup. Existing tables keep their policies. Empty entries are ignored and whitespace is not trimmed.
 
 Names have 1 to 63 lowercase ASCII letters, digits, hyphens or underscores, and start with a letter or digit.
 
@@ -46,9 +46,9 @@ Names have 1 to 63 lowercase ASCII letters, digits, hyphens or underscores, and 
 An index created by its first write has no `[indexes.<name>]` table, so it gets the global retention and size target. Declare an index in TOML when it needs its own policy from the first event.
 </Aside>
 
-You can restrict where a token may write with [`ingest_index_scopes`](/configure/credentials/). A token scoped to `payments` cannot create `audit` by writing to it.
+[`ingest_index_scopes`](/configure/credentials/) restricts where a token may write. A token scoped to `payments` can't create `audit` by writing to it.
 
-Indexes declared in configuration, including names listed in `LOGBROOK_INDEXES`, and the `default` index cannot be deleted. Other indexes can be deleted by an admin token:
+The `default` index and indexes declared in TOML or `LOGBROOK_INDEXES` can't be deleted. An admin token can delete the others:
 
 ```sh
 logbrook indexes delete audit --yes
@@ -58,7 +58,7 @@ Deletion is permanent. Stop producers first, because the next ingestion request 
 
 ## Retention
 
-Retention decides how long events are kept, measured against event time. Set a global default at the top level of the file. Every index inherits it.
+Retention is how long events are kept, measured against event time. Set the global default at the top level of the file.
 
 ```toml title="logbrook.toml"
 retention_days = 30
@@ -71,8 +71,6 @@ archive_after_ms = 86400000
 | `retention_ms` | `LOGBROOK_RETENTION_MS` | `604800000` (7 days) |
 | `archive_after_ms` | `LOGBROOK_ARCHIVE_AFTER_MS` | `86400000` (1 day) |
 
-Rules:
-
 - Values must be positive integers.
 - Retention must be longer than the archive age. For one-day retention, also lower `archive_after_ms`, for example to `3600000`.
 - In the file, `retention_days` wins over `retention_ms` if both are set.
@@ -82,7 +80,7 @@ The shipped container Compose file sets `LOGBROOK_RETENTION_DAYS` to 7 unless yo
 
 ## Disk-size targets
 
-A disk-size target makes an index expire its oldest events before they reach the age limit. It is off unless you set it.
+A disk-size target makes an index expire its oldest events before they reach the age limit. It is off by default.
 
 ```toml title="logbrook.toml"
 max_size_gb = 20
@@ -97,7 +95,7 @@ max_size_gb = 20
 - The smallest byte target is 16 MiB (16777216).
 - In the file, `max_size_gb` wins over `storage.max_size_bytes` if both are set.
 - In the environment, set only one of `LOGBROOK_MAX_SIZE_GB` and `LOGBROOK_MAX_SIZE_BYTES`.
-- The target applies to each index. Twenty GB means 20 GB for every index.
+- The target applies to each index: 20 GB means 20 GB for every index.
 - The Compose file defaults to 20 GB. Running the binary without a file or variable gives no target.
 
 The target counts the database, WAL, archives, spill files and other files Logbrook owns in the index directory. Over the target, maintenance expires the oldest events first, and ingestion returns `507` while the index stays at its target.
@@ -108,7 +106,7 @@ Writes in flight, compaction and query spill can briefly exceed the target, and 
 
 ## Per-index overrides
 
-Declare `[indexes.<name>]` to override the inherited values for one index. Omitted keys inherit the resolved global value.
+An `[indexes.<name>]` table overrides the inherited values for one index. Omitted keys inherit the resolved global value.
 
 ```toml title="logbrook.toml"
 retention_days = 30
@@ -128,7 +126,7 @@ Per-index keys: `retention_days`, `retention_ms`, `archive_after_ms`, `max_size_
 - In one table, use `retention_days` or `retention_ms`, not both. Likewise `max_size_gb` or `max_size_bytes`.
 - Per-index values override the global file values and the global environment variables. There are no per-index environment overrides.
 - A per-index retention must still exceed that index's archive age, whether the archive age is its own or inherited.
-- Changing a global value later does not change an index that overrides it.
+- Changing a global value later doesn't change an index that overrides it.
 
 Check what an index resolved to:
 
@@ -142,11 +140,11 @@ The output shows the measured size, the size target, the retention and whether t
 
 Policy changes apply on restart. Maintenance runs once at startup and then at each `maintenance_interval_secs`.
 
-- Shortening retention can expire existing events on the first pass. This cannot be undone.
-- Lengthening retention does not bring back events that already expired. Logbrook stores the expiry cutoff and it only moves forward. Live ingestion keeps rejecting events older than the cutoff.
-- Raising a disk-size target stops further size-based expiry but does not restore events already expired.
+- Shortening retention can expire existing events on the first pass. This can't be undone.
+- Lengthening retention doesn't bring back expired events. The stored expiry cutoff only moves forward, and ingestion keeps rejecting events older than it.
+- Raising a disk-size target stops further size-based expiry but doesn't restore expired events.
 
-Before you shorten retention, check what the new window would remove. Take a [backup](/operate/backup-and-upgrade/) first if you may want the data.
+Before you shorten retention, check what the new window removes, and take a [backup](/operate/backup-and-upgrade/) if you may want the data.
 
 Validate the file before restarting:
 

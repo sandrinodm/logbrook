@@ -5,9 +5,7 @@ sidebar:
   order: 1
 ---
 
-You send events to Logbrook with one `POST` request per batch. This page covers the endpoint, the accepted body formats, how input fields map to stored fields, and what to do when a request fails.
-
-Every example assumes a running server and an ingestion token. Export them first:
+You send events to Logbrook with one `POST` request per batch. The examples assume a running server and an ingestion token:
 
 ```sh
 export LOGBROOK_URL=http://127.0.0.1:3100
@@ -27,7 +25,7 @@ Content-Type: application/json
 | Path | `/indexes/{index}/logs/ingest`. The index name has 1 to 63 lowercase letters, digits, `-` or `_`, and starts with a letter or digit. |
 | Default index | `/logs/ingest` writes to the `default` index. Use the named route in new clients. |
 | Credential | An ingestion token in `Authorization: Bearer`. Read and admin tokens get `401`. |
-| Source | The ingestion token decides the `source` stamped on every event. A payload field can't override it. |
+| Source | Set by the ingestion token. A payload field can't override it. |
 
 If the index doesn't exist yet, the first authorized write creates it, as long as the server has a free index slot (four by default, including `default`). Creation happens before the body is validated, so a rejected batch can leave an empty index behind. See [credentials and roles](/configure/credentials/) for tokens and index scopes.
 
@@ -37,7 +35,7 @@ Send ingestion tokens only from backends and collectors. Never ship one in JavaS
 
 ## Send a batch
 
-A request body is either a JSON array or NDJSON. Both carry the same events.
+A request body is either a JSON array or NDJSON.
 
 <CodeGroup titles={["JSON array", "NDJSON"]}>
 
@@ -104,9 +102,9 @@ A request without a `Content-Type` is read as JSON. Parameters such as `; charse
 | `pid` | Optional nonnegative 64-bit integer or null | `pid` |
 | Any other key | Any JSON value within the limits | Nested under `attributes` |
 
-These are Pino's default field names and formats, so Pino output works without conversion. Logbrook doesn't translate other formats. Send `time` as Unix milliseconds, `level` as a number and `msg` as a string. Pino's numeric levels are 10 (trace), 20 (debug), 30 (info), 40 (warn), 50 (error) and 60 (fatal).
+These are Pino's default field names and formats, so Pino output works without conversion. Logbrook doesn't translate other formats. Pino's numeric levels are 10 (trace), 20 (debug), 30 (info), 40 (warn), 50 (error) and 60 (fatal).
 
-Missing optional fields come back as `null`. Other keys are kept as sent, including nested objects and arrays. A few details:
+Missing optional fields come back as `null`. Other keys are kept as sent, including nested objects and arrays:
 
 - A key named `id`, `source`, `event_time`, `received_at`, `message`, `host` or `logger` becomes an attribute. It never overrides the stored field.
 - An input `attributes` object stays nested, as `attributes.attributes`. Send custom fields at the top level so you can filter on them with [attribute filters](/query/attribute-filters/).
@@ -133,7 +131,7 @@ Limit batches by serialized bytes as well as event count. Operators can change t
 
 ## Responses and errors
 
-Errors are JSON objects like `{"error":"explanation"}`. The text is for people. Don't parse it.
+Errors are JSON objects like `{"error":"explanation"}`. The text is for people, so don't parse it.
 
 | Status | Meaning | What to do |
 | --- | --- | --- |
@@ -153,7 +151,7 @@ Errors are JSON objects like `{"error":"explanation"}`. The text is for people. 
 Logbrook has no idempotency keys and doesn't deduplicate. If a request times out or the connection drops, you can't tell whether the batch was stored. Retrying it can store the same events again.
 </Aside>
 
-Retry `429`, `503` and network errors with bounded exponential backoff. Don't retry `400`, `401`, `403` or `413` unchanged, because they fail the same way each time. When duplicates matter, add an attribute such as a batch or run ID so you can find and remove them from a query result. Logbrook has no API to delete individual events.
+Retry `429`, `503` and network errors with bounded exponential backoff. Don't retry `400`, `401`, `403` or `413` unchanged. When duplicates matter, add an attribute such as a batch or run ID so you can find and remove them from a query result. Logbrook has no API to delete individual events.
 
 ## Verify the batch
 
@@ -170,6 +168,6 @@ The CLI reads `LOGBROOK_URL` and `LOGBROOK_READ_TOKEN`. The read token must allo
 
 <CardGrid>
   <LinkCard title="Node.js with Pino" href="/send-logs/pino/" description="Ship Pino logs with batching and a clean shutdown." />
-  <LinkCard title="Limits and errors" href="/operate/limits-and-errors/" description="Every limit, status code and how to tune them." />
-  <LinkCard title="HTTP API reference" href="/api/" description="The generated reference for every endpoint." />
+  <LinkCard title="Limits and errors" href="/operate/limits-and-errors/" description="Every limit and status code." />
+  <LinkCard title="HTTP API reference" href="/api/" description="Every endpoint." />
 </CardGrid>

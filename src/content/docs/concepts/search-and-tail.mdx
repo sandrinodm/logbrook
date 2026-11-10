@@ -5,76 +5,74 @@ sidebar:
   order: 3
 ---
 
-Logbrook answers questions about the past with search and its aggregations, and about the present with live tail. This page explains how each one reads your data and why their orderings differ.
+Search and its aggregations answer questions about the past and order events by event time. Live tail follows what is arriving now, in ingestion order.
 
 ## Search over hot and archived events
 
-An index keeps recent events in DuckDB and older events in Parquet files. You do not choose between them. A query names an index and a time range, and Logbrook reads both stores in one consistent snapshot:
+An index keeps recent events in DuckDB and older events in Parquet files, and you don't choose between them. A query names an index and a time range, and Logbrook reads both stores in one consistent snapshot:
 
 1. It looks up the archive files whose recorded time range overlaps your range.
 2. It combines the hot rows with those Parquet files as a single dataset.
 3. It applies your filters and returns the matching events.
 
-The snapshot means a query sees a stable set of events even while ingestion, archival and compaction continue. Archive files that a running query reads stay on disk until it finishes.
+A query sees a stable set of events while ingestion, archival and compaction continue. Archive files that a running query reads stay on disk until it finishes.
 
 ### Time ranges
 
-Search, count, facets and histogram require `from` and `to` in Unix milliseconds. The range is UTC, includes `from` and excludes `to`. By default it can span at most 31 days (`max_query_range_ms`, up to 366 days). Ranges use [event time](/concepts/events-and-time/), so a late event appears at the position its timestamp gives it.
+Search, count, facets and histogram require `from` and `to` in Unix milliseconds. The range is UTC, includes `from` and excludes `to`. By default it can span at most 31 days (`max_query_range_ms`, up to 366 days). Ranges use [event time](/concepts/events-and-time/), so a late event appears where its timestamp puts it.
 
 ### Filters
 
-Filters are structured, not a query language. You can filter by source, service, logger, host, a case-sensitive message substring, a minimum level, and exact matches on top-level attributes. The [search and filter](/query/search/) and [attribute filters](/query/attribute-filters/) pages cover the syntax.
+There is no query language. You filter by source, service, logger, host, a case-sensitive message substring, a minimum level, and exact matches on top-level attributes. See [search and filter](/query/search/) and [attribute filters](/query/attribute-filters/) for the syntax.
 
-Read token scopes are applied before your filters. A source-scoped token can never see events outside its sources, even if its filters ask for them.
+Read token scopes apply before your filters, so a source-scoped token never sees events outside its sources.
 
 ### Results and pages
 
-Search returns events newest first by event time, using the event ID to break ties. A page holds at most `max_page_size` events, 1,000 by default.
-
-When more events match, the response includes a `next_cursor`. Send it back with the same range and filters to get the next page.
+Search returns events newest first by event time, with the event ID as tiebreaker. A page holds at most `max_page_size` events, 1,000 by default. When more events match, the response includes a `next_cursor`. Send it back with the same range and filters to get the next page.
 
 ### Cursors are bound to their query
 
-A cursor is not just a position. It is an opaque token that records:
+A cursor is an opaque token that records:
 
 - the index (on named-index routes, the token is prefixed with the index name)
 - a SHA-256 fingerprint of the range, page size, sources, filters and ordering
 - the position where the previous page ended
 - the highest event ID that existed when the first page ran
 
-Logbrook accepts a cursor only for the same query. If you change a filter, the range or the index, the cursor is rejected instead of silently returning a confusing page. The fingerprint prevents mistakes, not tampering, so do not treat cursors as a security feature. Pinning to the highest event ID keeps paging stable: events ingested after the first page do not shift later pages.
+Logbrook accepts a cursor only for the same query. Change a filter, the range or the index, and the cursor is rejected. The fingerprint prevents mistakes, not tampering, so don't treat cursors as a security feature. Pinning to the highest event ID keeps paging stable: events ingested after the first page don't shift later pages.
 
-A cursor can also expire. If retention removes the history a cursor points into, the next request fails with `400` and you start the search again.
+If retention removes the history a cursor points into, the next request fails with `400` and you start the search again.
 
 ### Facets, counts and histograms
 
-These read the same dataset with the same filters. A count returns the number of matches. Facets return the distinct values of service, logger, host, level and source with their counts. A histogram groups matches into time buckets by event time. See [counts, facets and histograms](/query/aggregations/).
+These read the same dataset with the same filters. A count returns the number of matches, facets return the distinct values of service, logger, host, level and source with their counts, and a histogram groups matches into time buckets by event time. See [counts, facets and histograms](/query/aggregations/).
 
 ## Live tail
 
-Live tail streams new events over server-sent events. It answers "what is arriving right now", so it follows **ingestion order**, not event time.
+Live tail streams new events over server-sent events, in **ingestion order**.
 
 ### Ordering
 
-Tail delivers events in the order Logbrook committed them. A delayed event with an old timestamp shows up when it arrives, after events with later timestamps. This is the reverse of search, which sorts by event time. The difference is deliberate: ordering by commit gives tail a stable position to resume from, even when producers have skewed clocks.
+Tail delivers events in the order Logbrook committed them. A delayed event with an old timestamp shows up when it arrives, after events with later timestamps. Commit order gives tail a stable position to resume from, even when producers have skewed clocks.
 
 ### Starting and resuming
 
-A new stream starts after the newest committed event. It does not replay history. Each event is sent with an SSE `id`. A client that reconnects with a `Last-Event-ID` header first receives the retained events it missed, in pages, and then continues with new ones. When the stream has caught up, it sends a `cursor` event with the data `caught up`.
+A new stream starts after the newest committed event and doesn't replay history. Each event carries an SSE `id`. A client that reconnects with that ID in a `Last-Event-ID` header first receives the retained events it missed, then new ones. When the stream has caught up, it sends a `cursor` event with the data `caught up`.
 
-Tail takes the same field filters as search, and the same source and index scopes apply. The resume position is bound to the stream's filters in the same way a search cursor is, so reconnect with the filters you started with.
+Tail takes the same field filters as search, under the same source and index scopes. Like a search cursor, a resume ID is bound to the stream's filters, so reconnect with the filters you started with.
 
 ### Gap notices
 
-Tail cannot resume across events that no longer exist. If retention expires events that the stream had not yet sent, the stream ends with a `gap` event. A `gap` event is also sent if a subscriber's output buffer is exceeded (`max_tail_buffer_bytes`). When you receive a gap, run a search for the period you may have missed, then reconnect.
+Tail can't resume across events that no longer exist. If retention expires events the stream hasn't sent yet, or a subscriber's output buffer is exceeded (`max_tail_buffer_bytes`), the stream ends with a `gap` event. Search the period you may have missed, then reconnect.
 
-A different failure ends the stream with an `error` event, and you reconnect or search.
+Any other failure ends the stream with an `error` event.
 
 <Aside type="note" title="Gaps can come from other sources">
 The expiry check covers the whole index. A reader scoped to one source can see a gap when another source's events expire.
 </Aside>
 
-A slow client only slows its own stream. Logbrook limits tail subscribers to `max_tail_subscribers` (8 by default), and each has its own buffer. See [live tail](/query/live-tail/) for how to consume the stream.
+A slow client only slows its own stream: each subscriber has its own buffer, and at most `max_tail_subscribers` (8 by default) can connect. See [live tail](/query/live-tail/) for how to consume the stream.
 
 ## Next steps
 

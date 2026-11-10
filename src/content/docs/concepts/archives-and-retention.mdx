@@ -5,11 +5,11 @@ sidebar:
   order: 4
 ---
 
-Logbrook keeps recent events in a database and moves older events to compact files. This page explains that lifecycle, how age-based retention and disk-size targets decide when events disappear, and what you must copy to back up an index.
+Each index keeps recent events in DuckDB and moves older ones into Parquet files. Events leave an index when they pass its retention period or when the index reaches its disk-size target.
 
 ## The lifecycle of an event
 
-Every index runs a background maintenance pass at startup and then every `maintenance_interval_secs` (60 seconds by default). Each pass runs these jobs in order.
+Every index runs a maintenance pass at startup and then every `maintenance_interval_secs` (60 seconds by default). A pass runs these jobs in order:
 
 | Job | What it does |
 | --- | --- |
@@ -18,42 +18,40 @@ Every index runs a background maintenance pass at startup and then every `mainte
 | Archive | Moves hot events older than `archive_after_ms` from DuckDB into Parquet files. Archiving does not delete anything. |
 | Compact | Merges small Parquet files in the same time partition into larger ones. |
 
-Retention, archiving and compaction all work on **event time**. An event stays in DuckDB for about a day by default, then lives in an archive until retention expires it.
+All of these work on **event time**. By default an event stays in DuckDB for about a day, then lives in an archive until retention expires it.
 
 ### Archives
 
-An archive is a Parquet file of older events. Archived events stay fully searchable: a query reads the hot rows and the relevant Parquet files together, as described in [search and live tail](/concepts/search-and-tail/).
+An archive is a Parquet file of older events. Archived events stay searchable: a query reads the hot rows and the relevant Parquet files together. See [search and live tail](/concepts/search-and-tail/).
 
-Archives are partitioned by event time, in one-hour partitions by default (`storage.archive_partition_ms`). Logbrook records each archive in a manifest inside the index database, with its time range and size. Paths in the manifest are relative to the data directory, so a complete data directory can be moved.
+Archives are partitioned by event time, one hour per partition by default (`storage.archive_partition_ms`). A manifest inside the index database records each archive's time range and size. Manifest paths are relative to the data directory, so you can move a complete data directory.
 
-Archive files are written to the index's `archives/` directory. Keep other files out of that directory: at startup, Logbrook removes `.tmp` files and `.parquet` files that the manifest does not reference. A missing archive file, or one with an unexpected size, is an integrity failure that makes the server unready.
+Archive files live in the index's `archives/` directory. Keep other files out of it: at startup, Logbrook removes `.tmp` files and any `.parquet` file the manifest doesn't reference. A missing archive file, or one with an unexpected size, is an integrity failure that makes the server unready.
 
 ## Retention
 
-Retention sets how long an index keeps events, measured against event time. The default is 7 days. You can set it for every index and override it for one.
+Retention is how long an index keeps events, measured against event time. The default is 7 days, and you can override it per index.
 
-Retention is a rule about **expiry**, not about when files are deleted:
+Expiry and file deletion are separate:
 
 - An expired event disappears from queries immediately.
-- An archive file is deleted only when every event in it has expired. A file that is partly expired stays on disk and is not rewritten.
-- The expiry cutoff only moves forward. Logbrook stores it, and live ingestion keeps rejecting events older than it.
+- An archive file is deleted only when every event in it has expired. A partly expired file stays on disk and is not rewritten.
+- The expiry cutoff is stored and only moves forward. Live ingestion rejects events older than it.
 
-Retention must be longer than the archive age. If you want one-day retention, also shorten `archive_after_ms`, for example to one hour.
+Retention must be longer than the archive age. For one-day retention, also shorten `archive_after_ms`, for example to one hour.
 
 ### Changing retention
 
-Policy changes apply when you restart the server. The first maintenance pass after startup applies the new policy.
+A policy change takes effect on the first maintenance pass after a restart.
 
 - A **shorter** retention can expire existing events on that pass.
-- A **longer** retention never restores events that already expired. They are gone.
-
-Because of this, lengthen retention before you need it, not after.
+- A **longer** retention never restores events that already expired, so lengthen it before you need it.
 
 ## Disk-size targets
 
-An index can also have a disk-size target. When the index reaches it, Logbrook expires the oldest events first, before they reach the age limit.
+An index can also have a disk-size target. When the index reaches it, Logbrook expires the oldest events before they reach the age limit.
 
-The target is measured, not reserved. It counts the database, the write-ahead log, archive files (including files that running queries still hold), spill files and other files Logbrook owns in the index directory.
+The target is measured, not reserved. It counts the database, the write-ahead log, archive files (including ones that running queries still hold), spill files and other files Logbrook owns in the index directory.
 
 When an index is at or over its target, maintenance:
 
@@ -61,13 +59,13 @@ When an index is at or over its target, maintenance:
 2. Expires the oldest archives, once queries have released them.
 3. Expires hot rows if no archives remain.
 
-While the index stays at its target, ingestion returns `507`. Writes resume after space is reclaimed or after you raise the target and restart.
+While the index is at its target, ingestion returns `507`. Writes resume once space is reclaimed, or after you raise the target and restart.
 
 <Aside type="caution" title="The size target is not a hard quota">
 Writes in flight, compaction, exports and query spill can briefly exceed the target. DuckDB reuses freed space inside its database file but does not shrink the file, so the footprint may stay above the target after events expire. Monitor free disk space separately. If you need a hard limit, use a filesystem or volume quota.
 </Aside>
 
-Both limits apply per index. An index with a 20 GB target has its own 20 GB, not a share of 20 GB.
+Both limits apply per index: a 20 GB target gives each index its own 20 GB, not a share of it.
 
 ## Backups
 
@@ -77,9 +75,7 @@ A backup is a copy of the whole data directory, taken while the server is stoppe
 - the archive manifest, which lives inside the DuckDB database
 - all Parquet archive files
 
-An archive file on its own is not a backup, and neither is the database alone. Neither holds all retained data. Do not copy a live data directory with a plain recursive copy, and do not treat `.index-trash/` as a backup.
-
-[Backup and upgrade](/operate/backup-and-upgrade/) describes the procedure.
+Neither the archive files nor the database alone hold all retained data. Don't copy a live data directory with a plain recursive copy, and don't treat `.index-trash/` as a backup. See [Back up and upgrade](/operate/backup-and-upgrade/) for the procedure.
 
 ## Next steps
 

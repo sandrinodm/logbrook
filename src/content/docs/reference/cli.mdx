@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The `logbrook` binary is the server, a set of offline maintenance commands, and an HTTP client for a running server. This page lists every subcommand and flag. Run `logbrook --help` or `logbrook <command> --help` for the same information from the binary.
+The `logbrook` binary is the server, a set of offline maintenance commands, and an HTTP client for a running server. `logbrook --help` and `logbrook <command> --help` print the same information as this page.
 
 ```text
 logbrook [GLOBAL OPTIONS] <COMMAND>
@@ -23,7 +23,7 @@ logbrook [GLOBAL OPTIONS] <COMMAND>
 | [`archive`](#archive) | Offline | Archive events older than a timestamp |
 | [`projection-status`](#projection-status) | Offline | Inspect promoted-attribute coverage |
 
-Client commands talk to a running server over HTTP. They never read server configuration or open the data directory, so you can run them from another machine. They reject `--config`. Offline commands open the data directory directly, so stop the server first.
+Client commands talk to a running server over HTTP. They never read server configuration or open the data directory, so you can run them from another machine, and they reject `--config`. Offline commands open the data directory directly, so stop the server first.
 
 ## Global options
 
@@ -42,7 +42,7 @@ Global options can appear before or after the subcommand.
 
 ### Logging
 
-Diagnostics are JSON lines on stderr. The default filter is `logbrook=info`. Set `RUST_LOG` to change it. Command results go to stdout. A failing command logs the error and exits with status 1.
+Diagnostics are JSON lines on stderr, filtered at `logbrook=info` unless you set `RUST_LOG`. Command results go to stdout. A failing command logs the error and exits with status 1.
 
 ## Client connection and credentials
 
@@ -57,7 +57,7 @@ The token comes from `--token`, then `LOGBROOK_TOKEN`, then the role-specific va
 | `indexes delete` | `LOGBROOK_ADMIN_TOKEN` |
 | `query`, `count` | `LOGBROOK_READ_TOKEN` |
 
-An admin token manages indexes and nothing else. It cannot query. A stray `LOGBROOK_TOKEN` holding the wrong role makes `query` fail with `401`. See [credentials and roles](/configure/credentials/).
+An admin token manages indexes and cannot query. A stray `LOGBROOK_TOKEN` holding the wrong role makes `query` fail with `401`. See [credentials and roles](/configure/credentials/).
 
 The client reads at most 16 MiB of response. Output is a table by default, or the server JSON with `--json`. A server error prints `server returned HTTP <status>: <message>` with your token redacted.
 
@@ -67,7 +67,7 @@ The client reads at most 16 MiB of response. Output is a table by default, or th
 logbrook --config logbrook.toml serve
 ```
 
-Starts the HTTP API and the Fluent Forward receiver, and runs until Ctrl-C or SIGTERM. It takes no flags of its own. Settings come from `--config` and `LOGBROOK_*` environment variables. Without `--config`, built-in defaults apply, including binding `127.0.0.1:3100`. See the [configuration file](/configure/configuration-file/).
+Starts the HTTP API and the Fluent Forward receiver, and runs until Ctrl-C or SIGTERM. It takes no flags of its own. Settings come from `--config` and `LOGBROOK_*` environment variables. Without `--config`, built-in defaults apply, including binding `127.0.0.1:3100`.
 
 Server environment variables read at startup:
 
@@ -83,7 +83,7 @@ Server environment variables read at startup:
 | `LOGBROOK_MAX_INDEXES`, `LOGBROOK_INDEXES` | Index count and declared indexes |
 | `LOGBROOK_ARCHIVE_AFTER_MS`, `LOGBROOK_MAINTENANCE_INTERVAL_SECS` | Archiving schedule |
 
-The configuration file page covers each setting, its default and its TOML key.
+The [configuration file](/configure/configuration-file/) page covers each setting, its default and its TOML key.
 
 ## check-config
 
@@ -91,7 +91,7 @@ The configuration file page covers each setting, its default and its TOML key.
 logbrook --config logbrook.toml check-config
 ```
 
-Validates the configuration and prints `Configuration is valid`. It does not open or change the data directory. Exits with status 1 and an error on stderr when the configuration is invalid.
+Validates the configuration and prints `Configuration is valid`, or exits with status 1 and an error on stderr. It does not open or change the data directory.
 
 ## healthcheck
 
@@ -126,7 +126,7 @@ logbrook indexes delete checkout --yes
 
 ## query
 
-Search events in one index. Fetches one page per run.
+Searches events in one index, one page per run.
 
 ```text
 logbrook query <NAME> [TIME] [FILTERS] [--limit <N>] [--cursor <CURSOR>]
@@ -152,16 +152,16 @@ Table output shows a `RANGE` row, a `TIME (ms)`, `LEVEL`, `SOURCE`, `SERVICE`, `
 
 ## count
 
-Count every matching event in the window.
+Counts every matching event in the window.
 
 ```text
 logbrook count <NAME> [TIME] [FILTERS]
 ```
 
-It takes the same name, time and filter options as `query`: `--since`, `--from`, `--to`, `--source`, `--service`, `--logger`, `--host`, `--message`, `--min-level` and `--filter`. It has no `--limit` or `--cursor`. Output is a bare number, or `{"count":N}` with `--json`. Requires a read token.
+It takes the same name, time and filter options as `query`, without `--limit` and `--cursor`. Output is a bare number, or `{"count":N}` with `--json`. Requires a read token.
 
 <Aside type="note" title="No facets, histogram or tail commands">
-The CLI has no facets, histogram or live tail command, and no export command. Use the [HTTP API](/reference/http-api/) for those, and loop over `query --json` to export. See [pagination and export](/query/pagination-and-export/).
+The CLI has no facets, histogram, live tail or export command. Use the [HTTP API](/reference/http-api/) for the first three, and loop over `query --json` to export. See [pagination and export](/query/pagination-and-export/).
 </Aside>
 
 ## import
@@ -210,7 +210,7 @@ Prints JSON with `schema_version`, `promoted_string_keys`, `hot_rows`, `hot_cove
 
 ## Running in a container
 
-The production image contains the same binary. Run client commands inside the running Compose service:
+Run client commands inside the running Compose service:
 
 ```sh
 docker compose exec logbrook logbrook indexes list

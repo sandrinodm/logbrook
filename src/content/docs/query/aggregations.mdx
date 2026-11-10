@@ -5,9 +5,9 @@ sidebar:
   order: 3
 ---
 
-Counts, facets and histograms summarize a whole time window without reading events page by page. They accept the same filters as [search](/query/search/), including [attribute filters](/query/attribute-filters/), and cover every matching event regardless of page size.
+Counts, facets and histograms summarize every matching event in a time window. They accept the same filters as [search](/query/search/), including [attribute filters](/query/attribute-filters/).
 
-Each request reads the data at its own point in time. Two requests with identical bounds can disagree while ingestion or retention is running.
+Each request reads the data at its own point in time, so two requests with identical bounds can disagree while ingestion or retention is running.
 
 The examples assume `$FROM`, `$TO`, `$LOGBROOK_URL` and `$LOGBROOK_READ_TOKEN` from the [search page](/query/search/), and an index named `checkout`.
 
@@ -22,7 +22,7 @@ logbrook count checkout --since 1h --service api --min-level 50
 logbrook count checkout --since 1h --min-level 50 --json
 ```
 
-The default output is a bare number. `--json` prints `{"count":5}`.
+The output is a bare number, or `{"count":5}` with `--json`.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -46,7 +46,7 @@ A window with no matches returns `{"count":0}`.
 
 ## Facets
 
-Facets list the most frequent values of the built-in fields. They are available over HTTP only. The CLI has no `facets` command.
+Facets list the most frequent values of the built-in fields. They're HTTP only: the CLI has no `facets` command.
 
 ```sh
 curl --fail-with-body --silent --show-error --get \
@@ -66,17 +66,15 @@ The response has five arrays: `services`, `loggers`, `hosts`, `levels` and `sour
 ]
 ```
 
-How facets behave:
-
-- Each array holds at most 100 values, sorted by descending count. It is not a full group-by.
+- Each array holds at most 100 values, sorted by descending count.
 - Level values are strings, such as `"50"`.
-- Events without an optional field are left out of that field's array, so an array does not always add up to the total.
+- Events without an optional field are left out of that field's array, so an array doesn't always add up to the total.
 - Filters apply before grouping, including a filter on the field being grouped. With `service=api`, the `services` array shows only `api`.
-- You cannot group by a custom attribute.
+- You can't group by a custom attribute.
 
 ## Histograms
 
-A histogram counts events in fixed-width time buckets. It is available over HTTP only.
+A histogram counts events in fixed-width time buckets. It's HTTP only.
 
 ```sh
 curl --fail-with-body --silent --show-error --get \
@@ -99,7 +97,7 @@ curl --fail-with-body --silent --show-error --get \
 
 ### Bucket size and limit
 
-`interval_ms` is a positive bucket width in milliseconds. A request can cover at most 2,000 buckets, counting a partial last bucket: `ceil((to - from) / interval_ms) <= 2000`. A request over the limit returns `400`.
+`interval_ms` is a positive bucket width in milliseconds. A request can cover at most 2,000 buckets, counting a partial last bucket: `ceil((to - from) / interval_ms) <= 2000`. Over the limit, it returns `400`.
 
 | Window | Interval | Buckets |
 | --- | --- | --- |

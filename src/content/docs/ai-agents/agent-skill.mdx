@@ -5,13 +5,11 @@ sidebar:
   order: 1
 ---
 
-The Logbrook repository ships an agent skill. It gives a coding agent the steps to deploy Logbrook, connect an application to it, and investigate the logs in an index. You will install the skill, then ask your agent to do one of those jobs in plain language.
-
-The skill lives in [`skills/logbrook`](https://github.com/sandrinodm/logbrook/tree/main/skills/logbrook).
+The Logbrook repository ships an agent skill in [`skills/logbrook`](https://github.com/sandrinodm/logbrook/tree/main/skills/logbrook). It gives a coding agent the steps to deploy Logbrook, connect an application to it, and investigate the logs in an index. Install it, then ask your agent for one of those jobs in plain language.
 
 ## What the skill does
 
-The skill covers three kinds of work. Your agent follows only the path the task needs, so querying an existing server doesn't trigger a new deployment.
+The agent follows only the path the task needs, so querying an existing server doesn't trigger a new deployment.
 
 | Task | What the agent does | Reference file |
 | --- | --- | --- |
@@ -19,7 +17,11 @@ The skill covers three kinds of work. Your agent follows only the path the task 
 | Connect | Configures an application or collector to send logs: HTTP ingestion, Pino for Node.js, or Docker and collectors over Fluent Forward. | `references/application-logging.md` and `references/forward.md` |
 | Investigate | Searches, counts, groups by facets, builds histograms, compares time windows, exports every page and follows new errors. | `references/queries-and-insights.md` |
 
-Each job has a completion check. An installation is done when the server is ready, storage survives a container restart, and a synthetic event can be ingested and queried. An integration is done when a uniquely identifiable record from the real application reaches the chosen index and queued logs drain on shutdown. An investigation names the index, time bounds, filters, matching counts and supporting events, and separates observed patterns from hypotheses.
+Each job has a completion check:
+
+- **Install:** the server is ready, storage survives a container restart, and a synthetic event can be ingested and queried.
+- **Connect:** a uniquely identifiable record from the real application reaches the chosen index, and queued logs drain on shutdown.
+- **Investigate:** the answer names the index, time bounds, filters, matching counts and supporting events, and separates observed patterns from hypotheses.
 
 <FileTree>
 
@@ -37,14 +39,14 @@ Each job has a completion check. An installation is done when the server is read
 
 </FileTree>
 
-`SKILL.md` has the description that tells an agent when to use the skill, plus a table that points to the right reference. The references ship with the skill, so it works outside a Logbrook checkout. The commands assume Bash or Zsh, Docker with the Compose plugin, `curl` and `jq`. The Pino examples also need Node.js and npm.
+`SKILL.md` tells an agent when to use the skill and points it to the right reference. The references ship with the skill, so it works outside a Logbrook checkout. The commands assume Bash or Zsh, Docker with the Compose plugin, `curl` and `jq`. The Pino examples also need Node.js and npm.
 
 ## Install the skill
 
 <Tabs syncKey="agent">
 <TabItem label="Claude Code">
 
-Copy the `skills/logbrook` directory into a skills directory. For every project, use your home directory:
+To use the skill in every project, copy `skills/logbrook` into your home directory:
 
 ```sh
 git clone https://github.com/sandrinodm/logbrook.git
@@ -59,19 +61,19 @@ mkdir -p .claude/skills
 cp -R /path/to/logbrook/skills/logbrook .claude/skills/
 ```
 
-Start a new Claude Code session so it picks up the skill. Claude loads it when a request matches its description, for example when you ask to deploy Logbrook or search logs stored in Logbrook.
+Start a new Claude Code session to pick up the skill. Claude loads it when a request matches its description, such as deploying Logbrook or searching its logs.
 
 </TabItem>
 <TabItem label="Other agents">
 
-The skill is a directory with a `SKILL.md` file and relative links to its references. Copy the whole `skills/logbrook` directory to wherever your agent reads skills, and keep the directory structure. `agents/openai.yaml` holds a display name, a short description and a default prompt for agents that read that file. If your agent has no skill support, add `SKILL.md` and the files it links to as context for the task.
+Copy the whole `skills/logbrook` directory to wherever your agent reads skills. Keep the directory structure, because `SKILL.md` links to its references by relative path. `agents/openai.yaml` holds a display name, a short description and a default prompt for agents that read that file. If your agent has no skill support, add `SKILL.md` and the files it links to as context for the task.
 
 </TabItem>
 </Tabs>
 
 ## Example prompts
 
-Give the agent the outcome you want. It asks only for details that change the work, such as the server URL, the index and which credential role the task needs.
+Describe the outcome you want. The agent asks only for details that change the work, such as the server URL, the index and the credential role.
 
 **Install**
 
@@ -93,23 +95,21 @@ Give the agent the outcome you want. It asks only for details that change the wo
 
 The skill tells the agent to work within these limits:
 
-- **Credentials stay out of the conversation.** Tokens live in the environment or a local secret file, never in the chat. Server tokens have roles. Ingestion tokens write, read tokens query, and admin tokens manage indexes but can't read events.
-- **Setup and investigation stay routine.** The agent doesn't combine routine setup or investigation with permanently deleting an index or a volume, or with shortening retention. Deleting data needs its own explicit request.
-- **Investigations read existing events.** Creating a demonstration event is a write, so an investigation-only request uses events that are already stored.
+- **Credentials stay out of the conversation.** Tokens live in the environment or a local secret file. Ingestion tokens write, read tokens query, and admin tokens manage indexes but can't read events.
+- **Deleting data needs its own request.** The agent doesn't delete an index or a volume, or shorten retention, as part of setup or an investigation.
+- **Investigations don't write.** An investigation-only request uses events that are already stored, not demonstration events.
 - **Reuse before replacing.** The agent reuses your existing deployment and configuration, and keeps an existing collector's configuration until a separate migration has verified counts and a rollback path.
 - **No invented guarantees.** The agent doesn't present configured limits as measured capacity, and doesn't claim clustering or exactly-once delivery. A response that was lost can store a batch twice.
 
-Review any command that changes a server before the agent runs it, as you would for any automation that touches your logs.
+Review any command that changes a server before the agent runs it.
 
 ## Agent-readable documentation
 
-This documentation site is also built for agents to read, so an agent can fetch the exact page it needs without scraping HTML:
+An agent can read this site without scraping HTML:
 
 - Every page has a Markdown version. Add `index.md` to the page path, for example `/logbrook/send-logs/http/index.md`.
 - `/logbrook/llms.txt` lists every page with its description. Each section also has its own `llms.txt`, such as `/logbrook/query/llms.txt`.
 - `/logbrook/llms-full.txt` contains the full text of the documentation in one file.
-
-Point your agent at `/logbrook/llms.txt` when it needs to find a page, and at a page's `index.md` when it needs the content.
 
 ## Next steps
 

@@ -5,9 +5,9 @@ sidebar:
   order: 1
 ---
 
-Search returns the newest matching events in a time range. You choose the range, narrow it with filters, and read the result as a table or as JSON. Search covers archived events as well as recent ones.
+Search returns the newest matching events in a time range, from recent and archived data alike.
 
-The examples show the CLI and the HTTP API side by side. They assume an index named `checkout` and a read token.
+The examples assume an index named `checkout` and a read token.
 
 ```sh
 export LOGBROOK_URL=http://127.0.0.1:3100
@@ -47,11 +47,11 @@ curl --fail-with-body --silent --show-error --get \
 </TabItem>
 </Tabs>
 
-Results are sorted by descending `event_time`, then descending `id` for ties. You cannot change the order. A search with no matches returns an empty `events` array and a null `next_cursor`.
+Results are sorted by descending `event_time`, then descending `id`. You can't change the order. A search with no matches returns an empty `events` array and a null `next_cursor`.
 
 ## Choose a time range
 
-A range is half-open: `from` is inclusive and `to` is exclusive. An event exactly at `to` belongs to the next window.
+`from` is inclusive and `to` is exclusive, so an event exactly at `to` belongs to the next window.
 
 <Tabs syncKey="interface">
 <TabItem label="CLI">
@@ -77,7 +77,7 @@ logbrook query checkout --from 1791334800000 --to 1791338400000
 | `d` | days |
 | `w` | weeks |
 
-`--since` cannot be combined with `--from` or `--to`. `--from` and `--to` must be given together, and `--from` must be earlier than `--to`.
+`--since` can't be combined with `--from` or `--to`. Give `--from` and `--to` together, with `--from` earlier than `--to`.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -92,12 +92,12 @@ curl --fail-with-body --silent --show-error --get \
   --data-urlencode 'to=1791338400000'
 ```
 
-The server requires `0 <= from < to <= 253402300799999`. A range outside those limits returns `400`.
+The server requires `0 <= from < to <= 253402300799999` and returns `400` otherwise.
 
 </TabItem>
 </Tabs>
 
-A single query can span at most 31 days by default. Split longer investigations into adjacent windows, or ask the operator to raise `max_query_range_ms`. Events removed by retention are not returned.
+A query can span at most 31 days by default. For longer periods, query adjacent windows or ask the operator to raise `max_query_range_ms`.
 
 To turn a UTC timestamp into milliseconds without platform-specific `date` flags, use `jq`:
 
@@ -107,7 +107,7 @@ jq -nr '"2026-10-07T14:00:00Z" | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime * 1000'
 
 ## Filter the results
 
-Different filters combine with AND. Only `source` accepts a list.
+Filters combine with AND.
 
 <Tabs syncKey="interface">
 <TabItem label="CLI">
@@ -149,37 +149,31 @@ URL-encode every parameter. `--data-urlencode` with `--get` does it for you.
 
 ### Source scope
 
-Without a `source` filter, a query searches every source your read token allows. Naming a source outside that list returns `403`. See [credentials and roles](/configure/credentials/).
+Without a `source` filter, a query covers every source your read token allows. Naming any other source returns `403`. See [credentials and roles](/configure/credentials/).
 
 ### Minimum level
 
-`min_level` matches `level >= n`. There is no exact-level or maximum-level filter. Logbrook stores any nonnegative integer level. The examples in these docs use Pino's numbers: `10` trace, `20` debug, `30` info, `40` warn, `50` error, `60` fatal. So `min_level=50` returns errors and fatal events.
+There is no exact-level or maximum-level filter. Logbrook stores any nonnegative integer level. These docs use Pino's numbers: `10` trace, `20` debug, `30` info, `40` warn, `50` error, `60` fatal. So `min_level=50` returns error and fatal events.
 
 ### Message text
 
-`message` is a literal substring match and it is case-sensitive. `timeout` does not match `Timeout`. Characters such as `%`, `_`, `*`, `|` and parentheses are ordinary characters, so `timeout|declined` searches for that exact text. A comma in any filter except `source` is also literal.
+`timeout` doesn't match `Timeout`. `%`, `_`, `*`, `|` and parentheses are ordinary characters, so `timeout|declined` searches for that exact text. A comma is also literal in every filter except `source`.
 
 ### Limits
 
-Text filters must fit the configured field byte limit (4 KiB by default). On the HTTP log routes, the path plus query string is limited to 32,768 bytes. HTTP rejects unknown parameters, and parameters the endpoint does not accept, with `400`. Only search accepts `limit` and `cursor`.
+Text filters must fit the configured field byte limit (4 KiB by default). On the HTTP log routes, the path plus query string is limited to 32,768 bytes. HTTP rejects unknown parameters, and parameters the endpoint doesn't accept, with `400`. Only search accepts `limit` and `cursor`.
 
 ## Read the output
 
 <Tabs syncKey="interface">
 <TabItem label="CLI">
 
-`query` prints a table by default: the range searched, one row per event, and a `NEXT_CURSOR` row when another page exists. The columns are time in Unix milliseconds, level, source, service and message. Missing values show as `-`.
+`query` prints a table: the range searched, one row per event, and a `NEXT_CURSOR` row when another page exists. The columns are time in Unix milliseconds, level, source, service and message. Missing values show as `-`.
 
 Add `--json` for the server response, with every attribute:
 
 ```sh
 logbrook query checkout --since 1h --service api --json
-```
-
-`count` prints a single number. With `--json` it prints `{"count":N}`.
-
-```sh
-logbrook count checkout --since 7d --source production
 ```
 
 </TabItem>
@@ -200,24 +194,14 @@ Search returns JSON:
 }
 ```
 
-Count returns `{"count":N}` for every matching event in the window, whatever the page size.
-
-```sh
-curl --fail-with-body --silent --show-error --get \
-  "$LOGBROOK_URL/indexes/checkout/logs/count" \
-  -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
-  --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
-  --data-urlencode 'min_level=50'
-```
-
 </TabItem>
 </Tabs>
 
-Each event has `id` (a string), `source`, `event_time`, `received_at` (both Unix milliseconds), `level`, `service`, `logger`, `host`, `pid`, `message` and `attributes`. Optional fields that were not sent are null. See [events and time](/concepts/events-and-time/).
+`id` is a string, and `event_time` and `received_at` are Unix milliseconds. Optional fields that weren't sent are null. See [events and time](/concepts/events-and-time/).
 
 ## Page size
 
-`--limit` and `limit` set the page size: 1 to 1,000, default 100. The server's configured maximum can be lower. To read past the first page, see [pagination and export](/query/pagination-and-export/).
+`--limit` and `limit` set the page size: 1 to 1,000, default 100. The server's configured maximum can be lower. To read past the first page, see [pagination and export](/query/pagination-and-export/). To count matches instead of reading them, see [counts, facets and histograms](/query/aggregations/).
 
 ## Next steps
 

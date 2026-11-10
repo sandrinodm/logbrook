@@ -5,22 +5,22 @@ sidebar:
   order: 4
 ---
 
-You use `logbrook import` to load historical events from a file straight into a data directory. Unlike HTTP ingestion, an import keeps each event's original time, even when it is older than the retention window. Use it to backfill history or migrate logs you already have on disk.
+`logbrook import` loads events from a file straight into a data directory. Unlike HTTP ingestion, it accepts events older than the retention window, so use it to backfill history or migrate logs you already have on disk.
 
 <Aside type="caution" title="Stop the server first">
-Import opens the data directory itself, so it runs offline. Stop the Logbrook service that owns the data directory before you import. One server process owns a data directory.
+Import opens the data directory itself, and only one process can own a data directory. Stop the Logbrook server that uses it before you import.
 </Aside>
 
 ## File format
 
-The file holds events in the same shape as [HTTP ingestion](/send-logs/http/). Each event needs `time` (Unix milliseconds), `level` (integer) and `msg` (string). Other fields follow the same mapping.
+The file holds events in the same shape as [HTTP ingestion](/send-logs/http/#event-fields): each needs `time` (Unix milliseconds), `level` (integer) and `msg` (string).
 
 | Format | Flag | Contents |
 | --- | --- | --- |
 | JSON | none | One nonempty JSON array of event objects. It must fit within the body limit (1 MiB by default). |
 | NDJSON | `--ndjson` | One event object per line. Blank lines are skipped. The file is streamed in bounded batches. |
 
-For large files, use NDJSON. A JSON file over the body limit fails with `JSON import exceeds body limit; use batched NDJSON`. An NDJSON line longer than the event limit (64 KiB by default) also fails.
+Use NDJSON for large files. A JSON file over the body limit fails with `JSON import exceeds body limit; use batched NDJSON`. An NDJSON line longer than the event limit (64 KiB by default) also fails.
 
 ## Run an import
 
@@ -32,7 +32,7 @@ Stop the process or container that uses the data directory.
 </Step>
 <Step title="Set retention to cover the history">
 
-Imports keep each event's time, and retention works on event time. Set retention to cover the imported history before you start the server again, or the events expire. See [indexes and retention](/configure/indexes-and-retention/).
+Retention works on event time. Set it to cover the imported history before you start the server again, or the events expire. See [indexes and retention](/configure/indexes-and-retention/).
 
 </Step>
 <Step title="Import the file">
@@ -74,7 +74,7 @@ For history older than that, pass `--from` and `--to` instead. One query spans a
 | Option | Meaning |
 | --- | --- |
 | `<file>` | Path of the JSON or NDJSON file. |
-| `--source <name>` | Required. The `source` stored on every imported event. Import uses no token, so this takes the place of the source an ingestion token would stamp. 1 to 128 ASCII letters, digits, `-`, `_` or `.`. |
+| `--source <name>` | Required. The `source` stored on every imported event, in place of the one an ingestion token would set. 1 to 128 ASCII letters, digits, `-`, `_` or `.`. |
 | `--ndjson` | Read the file as NDJSON instead of one JSON array. |
 | `--index <name>` | Global option. Destination index, `default` if omitted. The index is created if it doesn't exist. |
 | `--config <file>` | Global option. The server's TOML file. |

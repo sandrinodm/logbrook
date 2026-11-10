@@ -5,9 +5,9 @@ sidebar:
   order: 3
 ---
 
-Logbrook can receive logs over the [Forward protocol v1](https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1). That lets Docker's built-in `fluentd` logging driver, Fluentd and Fluent Bit send logs to Logbrook with no change to your applications. You will enable the listener, route a tag to an index and point containers at it.
+Logbrook can receive logs over the [Forward protocol v1](https://github.com/fluent/fluentd/wiki/Forward-Protocol-Specification-v1). Docker's built-in `fluentd` logging driver, Fluentd and Fluent Bit can then send logs with no change to your applications. To set it up, enable the listener, route a tag to an index and point containers at it.
 
-The receiver runs in the same `logbrook serve` process as the HTTP API. It is off by default and configured only in TOML. HTTP tokens are still required, and Forward clients authenticate as separate principals. For every setting, see the [Forward listener reference](/configure/forward-listener/).
+The receiver runs in the same `logbrook serve` process as the HTTP API. It is off by default and configured only in TOML. For every setting, see the [Forward listener reference](/configure/forward-listener/).
 
 ## Enable the listener
 
@@ -39,17 +39,17 @@ service_from = "tag_suffix"
 host = "application-host"
 ```
 
-This creates three things:
+This creates:
 
 - A listener on loopback that trusts every local client. See [authentication](/configure/forward-listener/#authentication).
 - A principal that fixes the stored `source` to `docker-host` and limits writes to the `application` index.
 - A route that sends every tag starting with `application.` to the `application` index, parses Docker records, and takes the service name from the rest of the tag.
 
-The principal sets the stored `source` and the route sets the destination index. Nothing in a record can change either. Use `tag` instead of `tag_prefix` to match one exact tag. Routes on the same listener can't overlap.
+Nothing in a record can change its source or index. Use `tag` instead of `tag_prefix` to match one exact tag. Routes on the same listener can't overlap.
 
 ## Run a local Docker route
 
-This walkthrough assumes the server runs on the same host as the Docker daemon, with the configuration above.
+The server runs on the same host as the Docker daemon, with the configuration above.
 
 <Steps>
 <Step title="Validate the configuration">
@@ -102,24 +102,7 @@ Containers pick up logging options only when they are created. Check the options
 
 ## Configure containers
 
-### Per container
-
-Pass the driver and its options when you start the container:
-
-```sh
-docker run -d --name api \
-  --log-driver fluentd \
-  --log-opt fluentd-address=127.0.0.1:24224 \
-  --log-opt fluentd-async=true \
-  --log-opt fluentd-request-ack=true \
-  --log-opt fluentd-sub-second-precision=true \
-  --log-opt fluentd-buffer-limit=8192 \
-  --log-opt fluentd-write-timeout=5s \
-  --log-opt tag=application.api \
-  your-image
-```
-
-### Docker Compose
+Set the driver and its options per container, with `--log-driver` and `--log-opt` as in the walkthrough, or in Compose:
 
 ```yaml title="compose.yaml"
 services:
@@ -139,7 +122,7 @@ services:
         cache-max-file: "3"
 ```
 
-The address is the one the Docker daemon sees, not the one the container sees. The daemon connects, so `127.0.0.1` means the host.
+The Docker daemon connects, not the container, so `127.0.0.1` means the host.
 
 | Option | Why |
 | --- | --- |
@@ -218,7 +201,7 @@ Then query `application` for the `logbrook-forward-synthetic` message.
 
 ## Use Fluentd or Fluent Bit
 
-Collectors send the same protocol. Create a listener, a principal and a route as above, with a route `tag` or `tag_prefix` that matches the tags your collector emits, then point the collector's forward output at the listener.
+Create a listener, a principal and a route as above, with a route `tag` or `tag_prefix` that matches the tags your collector emits, then point the collector's forward output at the listener.
 
 ```text title="Fluent Bit"
 [OUTPUT]
@@ -241,7 +224,7 @@ Collectors send the same protocol. Create a listener, a principal and a route as
 </match>
 ```
 
-These snippets use the same output options as the repository's collector interoperability harness (`tests/tools/forward_interop.py`), which also turns on gzip compression. Collector options change between releases, so check them against your collector version. Notes that apply to Logbrook:
+These snippets use the same output options as the repository's collector interoperability harness (`tests/tools/forward_interop.py`), which also turns on gzip compression. Check them against your collector version.
 
 - Use a `generic` route (the default `normalizer`) for collector output. A generic route doesn't detect Docker records from a `log` field.
 - Fluentd 1.20.1 defaults to `heartbeat_type transport`. For ACK-based TCP or TLS delivery, `heartbeat_type none` skips the separate probes and relies on the ACK timeout. If the sender uses UDP heartbeats, set `udp_heartbeat = true` on the listener. A non-loopback listener then also needs `allow_peers`.

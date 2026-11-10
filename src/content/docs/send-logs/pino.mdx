@@ -5,9 +5,9 @@ sidebar:
   order: 2
 ---
 
-You will run the Pino example against your Logbrook server, then copy its logger setup into your own application. The example batches records, retries failed requests and waits for delivery when the process shuts down.
+Run the Pino example against your Logbrook server, then copy its logger setup into your own application. It batches records, retries failed requests and waits for delivery on shutdown.
 
-The full code is in [`examples/pino-logger`](https://github.com/sandrinodm/logbrook/tree/main/examples/pino-logger). It uses [Pino](https://getpino.io) and [`pino-http-transport`](https://github.com/sandrinodm/pino-http-transport).
+The code is in [`examples/pino-logger`](https://github.com/sandrinodm/logbrook/tree/main/examples/pino-logger). It uses [Pino](https://getpino.io) and [`pino-http-transport`](https://github.com/sandrinodm/pino-http-transport).
 
 ## Requirements
 
@@ -15,7 +15,7 @@ The full code is in [`examples/pino-logger`](https://github.com/sandrinodm/logbr
 - A running Logbrook server and its ingestion token. See the [quickstart](/get-started/quickstart/). Read and admin tokens can't ingest.
 - To check the results, the read token and the `logbrook` CLI.
 
-`package-lock.json` pins Pino 10.4.0 and pino-http-transport 2.1.0. `package.json` also pins `thread-stream` 4.2.0 through `overrides`. The shutdown helper below relies on its delivery-aware flush.
+The example pins Pino 10.4.0, pino-http-transport 2.1.0 and `thread-stream` 4.2.0. The shutdown helper below relies on `thread-stream`'s delivery-aware flush.
 
 ## Run the example
 
@@ -47,7 +47,7 @@ export LOGBROOK_INDEX=pino-demo
 npm start
 ```
 
-This runs `basic.mjs`. It logs four records (a startup message, a completed checkout, a slow-provider warning and a payment error), closes the transport and sends the last partial batch.
+This runs `basic.mjs`, which logs four records and closes the transport.
 
 </Step>
 <Step title="Check the records">
@@ -66,7 +66,7 @@ After one run against a new index the count is `4`. Each further run adds four.
 </Step>
 </Steps>
 
-The transport sends `POST /indexes/pino-demo/logs/ingest` with a `Bearer` authorization header and `Content-Type: application/json`. If `pino-demo` doesn't exist, the first write creates it, as long as the token may write to it and the server has a free index slot. See [send logs over HTTP](/send-logs/http/).
+The transport sends `POST /indexes/pino-demo/logs/ingest`. If `pino-demo` doesn't exist, the first write creates it, as long as the token may write to it and the server has a free index slot. See [send logs over HTTP](/send-logs/http/).
 
 ### Use a .env file
 
@@ -76,33 +76,11 @@ To keep settings in a file, copy the template and set `LOGBROOK_INGEST_TOKEN`:
 cp .env.example .env
 ```
 
-```sh title=".env.example"
-# Use the same ingestion token configured on the running Logbrook server.
-LOGBROOK_URL=http://127.0.0.1:3100
-LOGBROOK_INDEX=pino-demo
-LOGBROOK_INGEST_TOKEN=
-LOG_SERVICE=checkout
-
-# Counts, not bytes. Keep batches below your server's body and event limits.
-BATCH_SIZE=250
-BATCH_INTERVAL_MS=1000
-MAX_BUFFER_SIZE=10000
-HTTP_TIMEOUT_MS=1500
-MAX_RETRIES=2
-RETRY_DELAY_MS=250
-
-# npm run bulk: a finite run, paced in chunks of at most 100 records.
-LOG_COUNT=10000
-LOG_RATE=1000
-# Optional unique marker; otherwise a UUID is generated for each run.
-# RUN_ID=load-001
-```
-
-`npm start` and `npm run bulk` load `.env` when it exists. Variables already exported in your shell win over the file. The repository's `.gitignore` excludes `.env`.
+`npm start` and `npm run bulk` load `.env` when it exists. Variables exported in your shell win over the file. The file takes the variables listed under [Settings](#settings).
 
 ## Configure the logger
 
-`logger.mjs` creates one transport and one logger for the process. It validates the environment, builds the ingest URL, starts the transport worker and returns the logger with a `close()` function.
+`logger.mjs` validates the environment, builds the ingest URL, starts the transport worker and returns the logger with a `close()` function.
 
 ```js title="logger.mjs"
 import { once } from 'node:events';
@@ -238,7 +216,7 @@ export async function createLogger(env = process.env) {
 }
 ```
 
-Create one logger and transport per process. Never create a transport per request or per record. Use child loggers to add request context. Every child shares the same worker thread and HTTP queue.
+Create one logger and transport per process, never one per request. Use child loggers to add request context; they share the worker thread and HTTP queue.
 
 ```js title="basic.mjs"
 import { createLogger } from './logger.mjs';
@@ -269,7 +247,7 @@ try {
 }
 ```
 
-In a server, call `close()` only after you stop accepting work and in-flight requests finish. `createLogger()` also returns `throwIfFailed()`, which throws if the transport has reported an error. `bulk.mjs` calls it to stop producing after a failure.
+`createLogger()` also returns `throwIfFailed()`, which throws if the transport has reported an error. `bulk.mjs` calls it to stop producing after a failure.
 
 ## How Pino fields map to Logbrook
 
@@ -290,7 +268,7 @@ Pino's `err` serializer records the error's type, message and stack. Every strin
 
 ## Settings
 
-All settings are environment variables. The example changes several of the transport's defaults.
+All settings are environment variables. The example overrides several transport defaults.
 
 | Variable | Example default | Transport default | Purpose |
 | --- | --- | --- | --- |
@@ -321,9 +299,7 @@ export RUN_ID="bulk-$(date +%s)"
 LOG_COUNT=100000 LOG_RATE=5000 BATCH_SIZE=500 npm run bulk
 ```
 
-It prints a JSON summary with the `runId`, the number of records `produced`, whether it was interrupted and the elapsed time. `produced` counts logger calls, not records Logbrook stored.
-
-The generator logs at most 100 records at a time and sleeps between bursts to hold the rate, so it never builds the whole run in memory. Ctrl-C or SIGTERM stops production, then drains the transport as usual.
+It prints a JSON summary with the `runId` and the number of records `produced`. That counts logger calls, not records Logbrook stored. Ctrl-C or SIGTERM stops production, then drains the transport as usual.
 
 To see what arrived, count by the run ID:
 
@@ -337,25 +313,25 @@ If nothing was dropped, expired or sent twice, the count equals the number you p
 
 ### Choose a batch size
 
-`BATCH_SIZE` counts records. The transport also splits batches at its `maxBatchBytes` limit, 1 MiB by default. It doesn't compress requests. The server's default limits are 1,000 events and 1 MiB per request, 64 KiB per event, 4 KiB per string value or key, and a nesting depth of 16.
+`BATCH_SIZE` counts records. The transport also splits batches at its `maxBatchBytes` limit, 1 MiB by default, and doesn't compress requests. The server's default [limits](/send-logs/http/#limits) are 1,000 events and 1 MiB per request.
 
-Start with 250 records per batch. Measure delivery latency and request sizes, then try 500 or 1,000 if your records are small. For a quiet service, lower `BATCH_INTERVAL_MS` if waiting a second before sending a partial batch is too long.
+Start with 250 records per batch and try 500 or 1,000 if your records are small. For a quiet service, lower `BATCH_INTERVAL_MS` if a second is too long to wait for a partial batch.
 
 The transport doesn't check the server's event, field or nesting limits. One invalid or oversized event rejects its whole batch, and retrying won't fix it. If your server has a smaller body limit, set `maxBatchBytes` in `logger.mjs` to match.
 
 ## Delivery and shutdown
 
-Each process gets one transport worker thread. It sends one HTTP request at a time and keeps records in order. There is no concurrency option.
+The transport worker sends one HTTP request at a time and keeps records in order. There is no concurrency option.
 
 **Queue overflow.** `MAX_BUFFER_SIZE` caps the number of waiting records, and the transport's `maxBufferBytes` caps their serialized size at 64 MiB by default. When either cap is reached, the transport drops the oldest waiting records and warns on stderr. It doesn't slow your application down.
 
 **Retries.** pino-http-transport 2.1.0 retries network errors, timeouts and every non-2xx response, including permanent ones such as `401` and `413`. It ignores `Retry-After` and adds no jitter. When a batch runs out of retries, the transport reports the error, discards the batch and moves on, and `close()` then fails.
 
 <Aside type="caution" title="Records can be lost or duplicated">
-The queue is only in memory. Records still queued are lost if the process is killed or the shutdown drain runs out of time. Logbrook acknowledges a batch only after committing it, but if the response is lost, the retry stores the batch again. Logbrook doesn't deduplicate. To ride out long outages, send logs through a collector with a persistent spool.
+The queue is only in memory. Records still queued are lost if the process is killed or the shutdown drain runs out of time. If a response is lost, the retry stores the batch again, because Logbrook doesn't deduplicate. To ride out long outages, send logs through a collector with a persistent spool.
 </Aside>
 
-**Draining on shutdown.** `close()` flushes the transport and waits for it to deliver everything, including partial batches and retries. Then it ends the worker and waits for it to exit. A delivery error makes `close()` fail, and the worker is ended anyway. Pino's worker `end()` blocks the main thread for up to about 10 seconds, so flushing first lets a slow backlog drain asynchronously. The flush has no overall deadline. Each HTTP attempt still uses `HTTP_TIMEOUT_MS`.
+**Draining on shutdown.** `close()` flushes the transport, waits for it to deliver everything, including partial batches and retries, then ends the worker. A delivery error makes `close()` fail, and the worker is ended anyway. Flushing first matters because Pino's worker `end()` blocks the main thread for up to about 10 seconds. The flush has no overall deadline; each HTTP attempt still uses `HTTP_TIMEOUT_MS`.
 
 In a service:
 

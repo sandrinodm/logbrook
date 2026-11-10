@@ -18,6 +18,7 @@
 import SidebarGroupHeader from "@/components/ui/sidebar/SidebarGroupHeader.astro";
 import SidebarLink from "@/components/ui/sidebar/SidebarLink.astro";
 import ApiMethodChip from "./ApiMethodChip.astro";
+import { pathLabel } from "./path-label";
 import type { ApiNavItem } from "@cloudflare/nimbus-docs/api";
 import { withBase } from "@cloudflare/nimbus-docs/runtime";
 
@@ -57,7 +58,7 @@ const onActiveTrail = Boolean(item.expanded || item.active);
     </details>
   ) : (
     <SidebarLink
-      label={item.label}
+      label={pathLabel(item.coordinate, item.label)}
       href={item.href ?? "#"}
       isCurrent={item.active}
       class={item.deprecated ? "line-through" : undefined}

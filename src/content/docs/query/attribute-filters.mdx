@@ -5,21 +5,19 @@ sidebar:
   order: 2
 ---
 
-Attribute filters select events by the custom fields your application sends, such as `requestId` or `statusCode`. The only operator is exact equality on a top-level attribute. Anything more is done on an export.
+Attribute filters select events by the custom fields your application sends, such as `requestId` or `statusCode`. The only operator is exact equality on a top-level attribute.
 
 ## Where attributes come from
 
-When you ingest an event, `time`, `level`, `msg`, `service`, `name`, `hostname` and `pid` become built-in fields. Every other top-level key lands under `attributes`. A `requestId` sent at the top level of the event becomes `attributes.requestId` and can be filtered.
+On ingestion, `time`, `level`, `msg`, `service`, `name`, `hostname` and `pid` become built-in fields. Every other top-level key lands under `attributes`, so a top-level `requestId` becomes `attributes.requestId` and can be filtered.
 
 ## Write a filter
 
-A filter is one JSON object with an `attributes` array of conditions:
+A filter is one JSON object with an `attributes` array of conditions. Each condition has a `key`, an `op` that must be `eq`, and a `value`:
 
 ```json
 {"attributes":[{"key":"runId","op":"eq","value":"run-123"}]}
 ```
-
-Each condition has a `key`, an `op` that must be `eq`, and a `value`.
 
 <Tabs syncKey="interface">
 <TabItem label="CLI">
@@ -77,18 +75,18 @@ Values must be a string, a number or a boolean. Types must agree:
 | `true` | `true` | Yes |
 | missing, `null`, array or object | any | No |
 
-Strings are case-sensitive and not Unicode-normalized. Numbers compare by value, so `123`, `123.0` and `1.23e2` are equal, and so are `0` and `-0.0`. Integers within the signed or unsigned 64-bit range compare exactly. Other numbers compare as 64-bit floats. An integer outside the 64-bit range, or a number that is not finite, is rejected.
+Strings are case-sensitive and not Unicode-normalized. Numbers compare by value, so `123`, `123.0` and `1.23e2` are equal, and so are `0` and `-0.0`. Integers within the signed or unsigned 64-bit range compare exactly, and other numbers compare as 64-bit floats. An integer outside the 64-bit range, or a number that isn't finite, is rejected.
 
 If different producers send the same attribute with different types, run one filter per type.
 
 ## Keys are literal
 
-A key names a property directly under `attributes`. Dots, slashes, tildes, dollar signs and wildcard characters in a key are matched literally. `a.b` looks for a property named `a.b`, not for `b` inside `a`.
+A key names a property directly under `attributes`. Dots, slashes, tildes, dollar signs and wildcard characters are matched literally: `a.b` looks for a property named `a.b`, not for `b` inside `a`.
 
-Two cases to watch:
+Two kinds of field are out of reach:
 
-- An input `attributes` object stays nested at `attributes.attributes`, so a filter cannot reach its fields.
-- Events received over Fluent Forward keep their application fields under `attributes.application`, which top-level equality cannot reach. See [Docker and Fluent Forward](/send-logs/docker-forward/).
+- An `attributes` object in the input stays nested at `attributes.attributes`.
+- Events received over Fluent Forward keep their application fields under `attributes.application`. See [Docker and Fluent Forward](/send-logs/docker-forward/).
 
 ## Limits
 
@@ -110,12 +108,12 @@ Omitting `filter` is the same as `{"attributes":[]}`. These return `400`: empty 
 
 ## What is not supported
 
-The server does not support nested attribute paths, ranges or numeric thresholds, case-insensitive message matching, OR, NOT, regular expressions, grouping by attribute, exact or maximum level filters, SQL, Lucene or KQL, or cross-index queries. The `message` filter is a literal, case-sensitive substring.
+The server doesn't support nested attribute paths, ranges or numeric thresholds, case-insensitive message matching, OR, NOT, regular expressions, grouping by attribute, exact or maximum level filters, SQL, Lucene or KQL, or cross-index queries.
 
-For these, export the matching window and filter it on your machine with a tool such as `jq`. See [pagination and export](/query/pagination-and-export/) and recipe 9 in the [cookbook](/query/cookbook/).
+For these, export the matching window and filter it on your machine with a tool such as `jq`. See [pagination and export](/query/pagination-and-export/) and recipe 8 in the [cookbook](/query/cookbook/).
 
 <Aside type="tip" title="Faster string lookups">
-An operator can list up to eight string attribute keys as promoted attributes in the configuration. String equality on those keys is faster. Results, tail, authorization and cursors behave the same. See the [glossary](/reference/glossary/).
+An operator can list up to eight string attribute keys as promoted attributes in the configuration. String equality on those keys is faster, and nothing else changes. See the [glossary](/reference/glossary/).
 </Aside>
 
 ## Next steps

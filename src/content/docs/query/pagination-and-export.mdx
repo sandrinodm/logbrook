@@ -5,11 +5,7 @@ sidebar:
   order: 4
 ---
 
-A search returns one page of events. To read more, follow the cursor. To work with the whole window, loop over the pages and write them to a file.
-
-## Page size
-
-Page size is 1 to 1,000 events, default 100. An operator can set a lower server maximum with `max_page_size`, but not a higher one.
+A search returns one page of events: 100 by default, and at most 1,000 or the server's `max_page_size` if that is lower. To read more, follow the cursor. To work with the whole window, loop over the pages and write them to a file.
 
 ## Follow the cursor
 
@@ -26,7 +22,7 @@ logbrook query checkout --from 1791334800000 --to 1791338400000 --limit 100 \
   --cursor '<next_cursor>' --json
 ```
 
-In table output the cursor appears on a final `NEXT_CURSOR` row. The command fetches one page per run.
+In table output the cursor is on the final `NEXT_CURSOR` row. Each run fetches one page.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -45,7 +41,7 @@ curl --fail-with-body --silent --show-error --get \
 
 ### What a cursor is bound to
 
-A cursor is tied to the query it came from. Keep these the same on every page:
+Keep these the same on every page:
 
 - the index and the route style (`/indexes/{index}/logs` or the unprefixed `/logs`; cursors from the two are not interchangeable, even for `default`)
 - `from` and `to`
@@ -54,15 +50,18 @@ A cursor is tied to the query it came from. Keep these the same on every page:
 
 A request that changes any of them returns `400`. Listing the same sources or attribute conditions in a different order is fine.
 
-Treat the cursor as opaque. Do not build one from an event `id`, and do not use a live-tail ID as a cursor. A cursor is at most 1,024 bytes.
+A cursor is opaque and at most 1,024 bytes. Don't build one from an event `id`, and don't use a live-tail ID as one.
 
 ### Consistency
 
-A paginated search only returns events that were ingested before its first page, even if later events fall inside the window. Start a new search to see them. It is not a snapshot: retention can remove events between pages or expire the cursor itself, which returns `400`. Cursors stay valid across server restarts. After an index is deleted and created again, start a new search. A cursor grants no access: every page is checked against the token that sends it.
+- Later pages return only events ingested before the first page, even if newer events fall inside the window. Start a new search to see those.
+- Retention can still remove events between pages, or expire the cursor itself, which returns `400`.
+- Cursors stay valid across server restarts, but not after an index is deleted and created again.
+- A cursor grants no access. Every page is checked against the token that sends it.
 
 ## Export every page as NDJSON
 
-This loop writes every page to `export.ndjson`, replacing any existing file. It stops after the last page and exits nonzero if a request fails. Delete a partial file before you retry.
+This loop writes every page to `export.ndjson`, replacing any existing file. If a request fails it exits nonzero and leaves a partial file, so delete that before you retry.
 
 ```sh
 export EXPORT_INDEX=checkout
@@ -91,7 +90,7 @@ logbrook_page() {
 wc -l < export.ndjson
 ```
 
-`EXPORT_INDEX`, `FROM` and `TO` are plain shell variables passed on the command line; the binary does not read them. Add any filter options to `logbrook_page`. Fix the bounds once, outside the loop. Events that retention removes before their page is read are not exported.
+`EXPORT_INDEX`, `FROM` and `TO` are plain shell variables, not settings the binary reads. Add filter options to `logbrook_page`, and keep the bounds fixed outside the loop.
 
 <Aside type="caution" title="Memory and response size">
 The CLI refuses a response larger than 16 MiB, and the server limits a response to 8 MiB by default. If a page is too large, lower `--limit` or narrow the filters.
@@ -99,7 +98,7 @@ The CLI refuses a response larger than 16 MiB, and the server limits a response 
 
 ## Project to JSON or CSV
 
-The server has no projection or CSV option. Reshape the NDJSON export on your machine with `jq`:
+The server has no projection or CSV option. Reshape the export with `jq`:
 
 ```sh
 # JSON projection; timestamps stay in milliseconds, IDs stay strings.
@@ -112,7 +111,7 @@ jq -r '[.id, .event_time, .service, .level, .message] | @csv' export.ndjson
 
 ## Filter an export client-side
 
-Anything the server cannot filter, you can filter on the export. Run these on the full export, not on a single page.
+What the server can't filter, you can filter on the full export:
 
 ```sh
 # Case-insensitive message match
@@ -128,7 +127,7 @@ jq -c 'select(.message | contains("/health") | not)' export.ndjson
 jq -c 'select((.attributes.durationMs // 0) >= 1000)' export.ndjson
 ```
 
-`jq -s` loads the whole file into memory. For large windows prefer streaming filters, or the server-side [facets](/query/aggregations/) when the built-in fields are enough.
+The filters above stream. `jq -s` loads the whole file into memory, so for large windows prefer server-side [facets](/query/aggregations/) when the built-in fields are enough.
 
 ## Next steps
 

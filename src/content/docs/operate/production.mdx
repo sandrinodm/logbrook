@@ -5,14 +5,14 @@ sidebar:
   order: 1
 ---
 
-This page covers what the production image contains, how to run it with the same hardening the Compose file uses, and a checklist to work through before you point real producers at it.
+Run the published image with the hardening the Compose file uses, give it a data directory that it alone owns, and work through the [checklist](#production-checklist) before you point real producers at it.
 
 ## What is in the image
 
-The image holds the `logbrook` executable and its runtime libraries. Rust, compilers, build caches and source files stay in the build stages.
+The image holds the `logbrook` executable and its runtime libraries, with no build tools or source files.
 
 - The runtime stage is a digest-pinned, multi-architecture `gcr.io/distroless/cc-debian13:nonroot` image. It supplies glibc, the C++ runtime that bundled DuckDB needs, and CA roots.
-- There is no shell and no package manager. Run client commands with `docker exec <container> logbrook ...`, not `sh`.
+- There is no shell and no package manager. Run client commands with `docker exec <container> logbrook ...`.
 - The process runs directly as UID and GID `10001:10001`. Docker sends `SIGTERM` to it (`STOPSIGNAL SIGTERM`).
 - The image sets `LOGBROOK_BIND=0.0.0.0:3100` and `LOGBROOK_DATA_DIR=/data`, declares `/data` as a volume, and exposes `3100`, plus `24224` (TCP and UDP) for the optional Forward listener.
 - The default command is `serve`.
@@ -41,10 +41,10 @@ docker run -d --name logbrook \
 | Setting | Why |
 | --- | --- |
 | Read-only root file system | Only `/data` and `/tmp` need to be writable. |
-| 256 MiB `/tmp` tmpfs | Gives the process scratch space without a writable root. |
+| 256 MiB `/tmp` tmpfs | Scratch space without a writable root. |
 | `--cap-drop ALL`, `no-new-privileges` | The process needs no capabilities. |
-| 35 second stop timeout | Graceful shutdown allows 30 seconds (`shutdown_timeout_secs`), so Docker must wait longer than that before it sends `SIGKILL`. |
-| Publish on `127.0.0.1` | Logbrook serves plain HTTP. Put a TLS-terminating reverse proxy in front for remote access. |
+| 35 second stop timeout | Graceful shutdown takes up to 30 seconds (`shutdown_timeout_secs`), and Docker must wait longer than that before it sends `SIGKILL`. |
+| Publish on `127.0.0.1` | Logbrook serves plain HTTP. See [listen address and ports](#listen-address-and-ports). |
 
 <Aside type="note" title="Pin the image">
 Use a version tag such as `0.1.0` or a digest, not `latest`. See [Releases and container images](/project/releases/).
@@ -52,7 +52,7 @@ Use a version tag such as `0.1.0` or a digest, not `latest`. See [Releases and c
 
 ## Own the data directory
 
-- **One process per data directory.** Never run two Logbrook processes on the same data root, and never mount one volume into two containers.
+- **One process per data directory.** Never run two Logbrook processes on the same data root or mount one volume into two containers.
 - **Ownership.** `/data` in the image is writable and owned by UID `10001`, including on a fresh named volume. A bind mount must have the same ownership: `chown -R 10001:10001 /srv/logbrook`.
 - **Keep other files out.** At startup Logbrook removes `.tmp` and unreferenced `.parquet` files from each archive directory, and it cleans `.index-trash/`. Do not store anything else there.
 - **No symlinks.** Index directories and files cannot be symlinks.
@@ -69,13 +69,13 @@ Use a version tag such as `0.1.0` or a digest, not `latest`. See [Releases and c
 
 If you change the port inside the container, set `LOGBROOK_BIND` to match, because the healthcheck reads the address from `--config` or `LOGBROOK_BIND`.
 
-Logbrook does not terminate TLS for the HTTP API. For remote access, run a TLS-terminating reverse proxy and keep the container port bound to loopback or a private network. Tokens travel in the `Authorization` header, so they must not cross the network in clear text.
+Logbrook does not terminate TLS for the HTTP API, and tokens travel in the `Authorization` header. For remote access, put a TLS-terminating reverse proxy in front and keep the container port on loopback or a private network.
 
 ## Sizing
 
-Logbrook does not publish sizing figures, so measure with your own workload. These facts decide how much room you need.
+There are no published sizing figures, so measure with your own workload. Account for the following.
 
-- **DuckDB memory is not the process memory.** `storage.memory_limit` (default `512MB`) is divided across `max_indexes` slots, counting unused ones, and it does not cap the process RSS. Leave headroom for the rest of the process. Compose sets no CPU or memory limit.
+- **DuckDB memory is not the process memory.** `storage.memory_limit` (default `512MB`) is divided across `max_indexes` slots, counting unused ones, and it does not cap the process RSS, so leave headroom. Compose sets no CPU or memory limit.
 - **Request budgets.** Raw body admission (16 MiB) and decoded admission (64 MiB) limit memory held by HTTP request bodies, not total memory. See [limits and errors](/operate/limits-and-errors/).
 - **Each index adds threads.** Reader workers and DuckDB threads apply per index. Set `max_indexes = 1` for a single-index deployment, or raise the total budgets when you add slots.
 - **Disk.** The disk target (`max_size_gb`) is a retention target, not a hard limit. Transactions, exports, compaction and query spills can briefly exceed it. Watch free disk separately, and use a filesystem quota if you need a hard ceiling. `/ready` does not warn about low disk space.

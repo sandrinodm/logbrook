@@ -5,12 +5,10 @@ sidebar:
   order: 5
 ---
 
-This page covers the commands that work on a data directory while the server is stopped: archiving hot events to Parquet, checking promoted string attribute coverage, and moving an older flat data directory to the current layout.
-
-Offline commands read the same configuration as the server (`--config` and the supported `LOGBROOK_*` environment variables) and open storage directly. Stop the server first, because only one process may use a data root at a time. They take `--index <name>`, which defaults to `default`.
+The commands on this page open the data directory directly, so stop the server first: only one process may use a data root at a time. They read the same configuration as the server (`--config` and the supported `LOGBROOK_*` environment variables) and take `--index <name>`, which defaults to `default`.
 
 <Aside type="note" title="Containers">
-The image has no shell, but offline commands are ordinary subcommands. Run them in a one-off container on the data volume with the server stopped, for example `docker run --rm -v logbrook_logs:/data -e LOGBROOK_INGEST_TOKEN -e LOGBROOK_READ_TOKEN ghcr.io/sandrinodm/logbrook:0.1.0 archive --before 1791321600000`. Configuration loading still requires an ingestion and a read token, so pass the server's tokens and any other `LOGBROOK_*` settings it uses, such as `LOGBROOK_MAX_INDEXES`. The image already sets `LOGBROOK_DATA_DIR=/data`.
+Run offline commands in a one-off container on the data volume with the server stopped, for example `docker run --rm -v logbrook_logs:/data -e LOGBROOK_INGEST_TOKEN -e LOGBROOK_READ_TOKEN ghcr.io/sandrinodm/logbrook:0.1.0 archive --before 1791321600000`. Configuration loading still requires an ingestion and a read token, so pass the server's tokens and any other `LOGBROOK_*` settings it uses, such as `LOGBROOK_MAX_INDEXES`. The image already sets `LOGBROOK_DATA_DIR=/data`.
 </Aside>
 
 ## Archive events offline
@@ -68,7 +66,7 @@ An index is activated the first time it opens with a non-empty key set, and acti
 Activation upgrades the index, and there are no downgrade migrations. Take an offline backup first. See [backup, restore and upgrade](/operate/backup-and-upgrade/).
 </Aside>
 
-Promoted archives carry SHA-256 digests, checked at startup and around query and compaction reads. Never modify archive files in place: a mismatch fails the operation and can mark the index unready. The digests catch accidental changes, not someone who can also rewrite the database and its manifest. Hashing adds some CPU cost to writes and archive reads.
+Promoted archives carry SHA-256 digests, checked at startup and around query and compaction reads. Never modify archive files in place: a mismatch fails the operation and can mark the index unready. The digests catch accidental changes, not someone who can also rewrite the database and its manifest, and hashing adds some CPU cost to writes and archive reads.
 
 ### Check coverage
 

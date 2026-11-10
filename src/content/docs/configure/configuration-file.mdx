@@ -5,38 +5,34 @@ sidebar:
   order: 1
 ---
 
-This page is the reference for Logbrook's TOML configuration: where it is loaded from, every key with its type and default, the environment variables that override it, and the errors you see when validation fails.
+Logbrook reads one TOML file and a fixed set of `LOGBROOK_*` environment variables, once, at startup. Restart the server to apply a change.
 
 ## How configuration loads
 
-Logbrook resolves settings in this order. Later steps win.
+Settings resolve in this order, and later steps win:
 
 1. Built-in defaults.
 2. The TOML file, if you pass one.
 3. The supported `LOGBROOK_*` environment variables.
 
-You pass the file with the global `--config` flag. There is no environment variable for the file path and no default search path.
+Pass the file with the global `--config` flag. There is no environment variable for the file path and no default search path.
 
 ```sh
 logbrook --config logbrook.toml check-config
 logbrook --config logbrook.toml serve
 ```
 
-Without `--config`, Logbrook runs on defaults and the environment alone. It still needs at least one ingestion token and one read token, so set `LOGBROOK_INGEST_TOKEN` and `LOGBROOK_READ_TOKEN`.
+Without `--config`, Logbrook runs on defaults and the environment. It still needs an ingestion token and a read token, so set `LOGBROOK_INGEST_TOKEN` and `LOGBROOK_READ_TOKEN`.
 
-Configuration is read once at startup. Restart the server to apply changes.
-
-Other rules to know:
-
-- Unknown keys are rejected, in every table.
-- Remote commands such as `logbrook query` and `logbrook indexes` do not read the file. They reject `--config` and take `--url` and token variables instead. See the [CLI reference](/reference/cli/).
+- Unknown keys are rejected in every table.
+- Remote commands such as `logbrook query` and `logbrook indexes` don't read the file. They reject `--config` and take `--url` and token variables instead. See the [CLI reference](/reference/cli/).
 - `logbrook healthcheck` reads only `bind` from the file, plus `LOGBROOK_BIND`.
-- There is no generic `LOGBROOK_<SETTING>` mapping. Only the variables listed [below](#environment-variables) work. There is no `_FILE` variant for secrets.
-- An empty environment variable is a value, not "unset". Integer overrides reject empty, zero and negative values, and token overrides reject empty credentials.
+- Only the variables listed [below](#environment-variables) work. There is no generic `LOGBROOK_<SETTING>` mapping and no `_FILE` variant for secrets.
+- An empty environment variable counts as set. Integer overrides reject empty, zero and negative values, and token overrides reject empty credentials.
 
 ### Validate before you start
 
-`check-config` loads and validates the configuration without opening or changing the data directory.
+`check-config` validates the configuration without opening the data directory.
 
 ```sh
 logbrook --config logbrook.toml check-config
@@ -46,7 +42,7 @@ logbrook --config logbrook.toml check-config
 Configuration is valid
 ```
 
-Start from the [example file](https://github.com/sandrinodm/logbrook/blob/main/logbrook.example.toml). It ships with placeholder tokens beginning with `replace-with-`, which fail validation until you replace them.
+Start from the [example file](https://github.com/sandrinodm/logbrook/blob/main/logbrook.example.toml). Its placeholder tokens begin with `replace-with-` and fail validation until you replace them.
 
 <Aside type="tip" title="Keep real credentials out of Git">
 The repository ignores files named `*.local.toml`. Name your copy `logbrook.local.toml`.
@@ -62,11 +58,11 @@ These keys sit before any `[table]` header.
 | --- | --- | --- | --- |
 | `bind` | string | `"127.0.0.1:3100"` | HTTP listen address, as `IP:port`. IPv6 uses `"[::1]:3100"`. Env: `LOGBROOK_BIND`. |
 | `max_connections` | integer | `128` | Concurrent HTTP connections. Range 1 to 65536. |
-| `header_timeout_ms` | integer | `10000` | Time allowed to receive request headers. Range 1 to 300000. |
-| `shutdown_timeout_secs` | integer | `30` | Time allowed to drain listeners, sessions and storage on shutdown. Must be positive. |
-| `maintenance_interval_secs` | integer | `60` | Delay between background retention, archive and compaction passes. Must be positive. Env: `LOGBROOK_MAINTENANCE_INTERVAL_SECS`. |
+| `header_timeout_ms` | integer | `10000` | Time to receive request headers. Range 1 to 300000. |
+| `shutdown_timeout_secs` | integer | `30` | Time to drain listeners, sessions and storage on shutdown. Positive. |
+| `maintenance_interval_secs` | integer | `60` | Delay between retention, archive and compaction passes. Positive. Env: `LOGBROOK_MAINTENANCE_INTERVAL_SECS`. |
 
-Logbrook speaks plain HTTP only. Put a reverse proxy in front for TLS.
+Logbrook serves plain HTTP. Put a reverse proxy in front for TLS.
 
 ### Credentials
 
@@ -74,7 +70,7 @@ Logbrook speaks plain HTTP only. Put a reverse proxy in front for TLS.
 | --- | --- | --- | --- |
 | `admin_tokens` | array of strings | `[]` | Optional admin credentials. Env: `LOGBROOK_ADMIN_TOKEN` replaces the whole list with one token. |
 
-Ingestion and read tokens are tables, listed [below](#ingest_tokens). See [credentials and roles](/configure/credentials/) for how roles work.
+Ingestion and read tokens are [tables](#ingest_tokens). [Credentials and roles](/configure/credentials/) explains the roles.
 
 ### Indexes and retention
 
@@ -86,7 +82,7 @@ Ingestion and read tokens are tables, listed [below](#ingest_tokens). See [crede
 | `retention_ms` | integer | `604800000` (7 days) | Retention in milliseconds. Must exceed `archive_after_ms`. Env: `LOGBROOK_RETENTION_MS`. |
 | `max_size_gb` | integer | unset | Per-index disk target in decimal GB (1 GB = 1,000,000,000 bytes). Wins over `storage.max_size_bytes` if both are set. Env: `LOGBROOK_MAX_SIZE_GB`. |
 
-These values are defaults that every index inherits. [Indexes and retention](/configure/indexes-and-retention/) explains the behavior and the per-index overrides.
+Every index inherits these values. [Indexes and retention](/configure/indexes-and-retention/) covers the behavior and per-index overrides.
 
 ### Ingestion limits
 
@@ -98,13 +94,13 @@ These values are defaults that every index inherits. [Indexes and retention](/co
 | `max_metadata_depth` | integer | `16` | 1 to 64. Nesting depth of attributes. |
 | `max_field_bytes` | integer | `4096` | Positive, at most `max_event_bytes`. Size of string fields, attribute keys and string values, and of supported filter fields. |
 | `max_inflight_requests` | integer | `16` | 1 to 1024. Concurrently admitted HTTP requests, process-wide. Live-tail streams are budgeted separately. |
-| `max_inflight_body_bytes` | integer | `16777216` (16 MiB) | At least `2 * max_body_bytes`, at most 4294967295. Process-wide budget for raw bodies. Exhaustion rejects ingestion with an overload. |
+| `max_inflight_body_bytes` | integer | `16777216` (16 MiB) | At least `2 * max_body_bytes`, at most 4294967295. Process-wide budget for raw bodies. When it is used up, ingestion is rejected as overload. |
 | `max_decoded_bytes` | integer | `67108864` (64 MiB) | At least `max_event_bytes`, at most 4294967295. Process-wide estimate of decoded allocations. |
 | `body_idle_timeout_ms` | integer | `5000` | Positive, at most `body_total_timeout_ms`. Longest wait between body frames. |
 | `body_total_timeout_ms` | integer | `30000` | At least `body_idle_timeout_ms`, at most 300000. Total time to receive a body. |
 | `max_future_skew_ms` | integer | `300000` | 0 to 86400000. How far ahead of server time an event timestamp may be. |
 
-These budgets bound memory held by request bodies. They do not cap process memory, so leave headroom for DuckDB.
+These budgets bound the memory held by request bodies, not process memory. Leave headroom for DuckDB.
 
 ### Query and tail limits
 
@@ -118,7 +114,7 @@ These budgets bound memory held by request bodies. They do not cap process memor
 
 ## `[storage]`
 
-Storage settings apply to every index. `memory_limit`, `temp_limit` and `queue_bytes` are process-wide budgets that Logbrook divides evenly across the `max_indexes` slots, including unused ones.
+These settings apply to every index. `memory_limit`, `temp_limit` and `queue_bytes` are process-wide budgets divided evenly across the `max_indexes` slots, including unused ones.
 
 | Key | Type | Default | Range and meaning |
 | --- | --- | --- | --- |
@@ -140,7 +136,7 @@ Storage settings apply to every index. `memory_limit`, `temp_limit` and `queue_b
 | `promoted_string_keys` | array of strings | `[]` | Up to eight distinct top-level string attributes, each 1 to 256 bytes, stored in typed columns to speed up equality filters. |
 
 <Aside type="caution" title="promoted_string_keys is permanent for an index">
-The first time an index opens with a non-empty key set, its keys are recorded and its schema upgrades to version 4. Leaving the setting out later does not remove them, and a different non-empty set is rejected at startup. To change the keys, create a new index and reimport. Take an offline backup before you turn it on.
+The first time an index opens with a non-empty key set, it records the keys and upgrades its schema to version 4. Removing the setting later doesn't remove the keys, and a different non-empty set is rejected at startup. To change the keys, create a new index and reimport. Take an offline backup before you turn this on.
 </Aside>
 
 ## `[ingest_tokens]`
@@ -197,11 +193,11 @@ Omitted keys inherit the resolved top-level value. The `default` index always ex
 
 ## `[forward]`
 
-An optional [Fluent Forward](/configure/forward-listener/) receiver. It is TOML-only and disabled by default (`enabled = false`). Its listeners, principals and routes are documented on the [Forward listener](/configure/forward-listener/) page. HTTP credentials remain required when it is on, and enabling it requires `storage.queue_capacity` of at least 2.
+The optional Fluent Forward receiver. It is TOML-only and off by default (`enabled = false`). Enabling it requires `storage.queue_capacity` of at least 2, and HTTP credentials are still required. See [Forward listener](/configure/forward-listener/) for its keys.
 
 ## Environment variables
 
-Only these variables are read by the server. Unset variables leave the file and defaults intact.
+The server reads only these variables. An unset variable leaves the file value or default in place.
 
 | Variable | Overrides | Notes |
 | --- | --- | --- |
@@ -224,16 +220,16 @@ Only these variables are read by the server. Unset variables leave the file and 
 Numeric values are base-10 integers without units. Environment policy values replace the global defaults, but an explicit `[indexes.<name>]` setting still wins.
 
 <Aside type="note" title="Client variables are separate">
-`LOGBROOK_URL`, `LOGBROOK_TOKEN` and the role tokens are also read by the remote CLI commands. They are described in the [CLI reference](/reference/cli/).
+The remote CLI commands read `LOGBROOK_URL`, `LOGBROOK_TOKEN` and the role tokens. See the [CLI reference](/reference/cli/).
 </Aside>
 
 ## Validation errors
 
-`serve` and `check-config` fail with a message that names the problem. The server exits with a nonzero status and logs the error as JSON on stderr.
+`serve` and `check-config` fail with one of these messages. The server exits with a nonzero status and logs the error as JSON on stderr.
 
 | Message | Cause |
 | --- | --- |
-| `invalid TOML config at line N, column M; check syntax, setting names, and value types` | Syntax error, unknown key or wrong type. Logbrook reports only the location, so credentials in the file are not echoed. |
+| `invalid TOML config at line N, column M; check syntax, setting names, and value types` | Syntax error, unknown key or wrong type. Only the location is reported, so credentials in the file aren't echoed. |
 | `cannot read config: ...` | The file is missing or unreadable. |
 | `configure at least one ingest token and one read token ...` | `[ingest_tokens]` or `[read_tokens]` is empty. |
 | `tokens must contain 16–512 visible ASCII characters without whitespace; replace example credentials` | A token is the wrong length, has other characters, or starts with `replace-with-`. |
