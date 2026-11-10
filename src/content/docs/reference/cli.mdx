@@ -158,7 +158,7 @@ Counts every matching event in the window.
 logbrook count <NAME> [TIME] [FILTERS]
 ```
 
-It takes the same name, time and filter options as `query`, without `--limit` and `--cursor`. Output is a bare number, or `{"count":N}` with `--json`. Requires a read token.
+It takes the same name, time and filter options as `query`, without `--limit` and `--cursor`. Output is a bare number, or `{ "count": N }` with `--json`. Requires a read token.
 
 <Aside type="note" title="No facets, histogram or tail commands">
 The CLI has no facets, histogram, live tail or export command. Use the [HTTP API](/reference/http-api/) for the first three, and loop over `query --json` to export. See [pagination and export](/query/pagination-and-export/).
@@ -182,7 +182,7 @@ logbrook [--config <PATH>] [--index <NAME>] import <FILE> --source <SOURCE> [--n
 logbrook --config logbrook.toml --index payments import events.ndjson --source checkout --ndjson
 ```
 
-NDJSON is committed in bounded batches. Each batch commits on its own, so a failure leaves earlier batches stored and rerunning the whole import duplicates them. Prints `{"imported":N}`. See [import log files](/send-logs/import-files/).
+NDJSON is committed in bounded batches. Each batch commits on its own, so a failure leaves earlier batches stored and rerunning the whole import duplicates them. Prints `{ "imported": N }`. See [import log files](/send-logs/import-files/).
 
 ## archive
 
@@ -196,7 +196,7 @@ logbrook [--config <PATH>] [--index <NAME>] archive --before <MS>
 | --- | --- | --- | --- |
 | `--before <MS>` | integer, 0 or more, required | none | Archive events with an event time before this Unix millisecond timestamp |
 
-It repeats until nothing older remains, then prints `{"archived":N}`. See [archives and migration](/operate/archives-and-migration/).
+It repeats until nothing older remains, then prints `{ "archived": N }`. See [archives and migration](/operate/archives-and-migration/).
 
 ## projection-status
 

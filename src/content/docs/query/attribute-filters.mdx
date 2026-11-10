@@ -16,7 +16,7 @@ On ingestion, `time`, `level`, `msg`, `service`, `name`, `hostname` and `pid` be
 A filter is one JSON object with an `attributes` array of conditions. Each condition has a `key`, an `op` that must be `eq`, and a `value`:
 
 ```json
-{"attributes":[{"key":"runId","op":"eq","value":"run-123"}]}
+{ "attributes": [{ "key": "runId", "op": "eq", "value": "run-123" }] }
 ```
 
 <Tabs syncKey="interface">
@@ -24,10 +24,10 @@ A filter is one JSON object with an `attributes` array of conditions. Each condi
 
 ```sh
 logbrook query checkout --since 1h \
-  --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}'
+  --filter '{ "attributes": [{ "key": "requestId", "op": "eq", "value": "req-004" }] }'
 
 logbrook count checkout --since 1h \
-  --filter '{"attributes":[{"key":"statusCode","op":"eq","value":504}]}'
+  --filter '{ "attributes": [{ "key": "statusCode", "op": "eq", "value": 504 }] }'
 ```
 
 The CLI validates the JSON before it sends the request.
@@ -42,7 +42,7 @@ curl --fail-with-body --silent --show-error --get \
   "$LOGBROOK_URL/indexes/checkout/logs/count" \
   -H "Authorization: Bearer $LOGBROOK_READ_TOKEN" \
   --data-urlencode "from=$FROM" --data-urlencode "to=$TO" \
-  --data-urlencode 'filter={"attributes":[{"key":"statusCode","op":"eq","value":504}]}'
+  --data-urlencode 'filter={ "attributes": [{ "key": "statusCode", "op": "eq", "value": 504 }] }'
 ```
 
 The same `filter` works on search, count, facets, histogram and tail, and it combines with `min_level`, `service` and the other filters.
@@ -55,10 +55,10 @@ The same `filter` works on search, count, facets, histogram and tail, and it com
 All conditions must match (AND). The filter applies before pagination and aggregation, so counts, facets and histograms cover only matching events.
 
 ```json
-{"attributes":[
-  {"key":"runId","op":"eq","value":"run-123"},
-  {"key":"actorJobId","op":"eq","value":"actor-job-456"}
-]}
+{ "attributes": [
+  { "key": "runId", "op": "eq", "value": "run-123" },
+  { "key": "actorJobId", "op": "eq", "value": "actor-job-456" }
+] }
 ```
 
 There is no OR and no NOT. A condition repeated with the same value counts once. Two different values for the same key are rejected.
@@ -100,10 +100,10 @@ Two kinds of field are out of reach:
 
 The encoded filter also counts toward the 32,768-byte request-target limit on HTTP, and a proxy in front of Logbrook may allow less.
 
-Omitting `filter` is the same as `{"attributes":[]}`. These return `400`: empty or malformed JSON, `{}`, unknown or repeated members, a repeated `filter` parameter, and any operator other than `eq`. For example:
+Omitting `filter` is the same as `{ "attributes": [] }`. These return `400`: empty or malformed JSON, `{}`, unknown or repeated members, a repeated `filter` parameter, and any operator other than `eq`. For example:
 
 ```json
-{"error":"filter.attributes[1].op: only eq is supported"}
+{ "error": "filter.attributes[1].op: only eq is supported" }
 ```
 
 ## What is not supported

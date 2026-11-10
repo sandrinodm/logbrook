@@ -15,6 +15,7 @@
  */
 
 import { mount } from "@cloudflare/nimbus-docs/client";
+import { scrollRoot } from "@/lib/scroll-root";
 
 // Ignore the top 10% and bottom 70% of the viewport so the "active" heading is
 // whatever sits near the top of the reading area. The reading band is [10%,
@@ -68,7 +69,7 @@ function initMobileToc(root: HTMLElement): () => void {
         ? "auto"
         : "smooth";
       if (slug === "_top") {
-        window.scrollTo({ top: 0, behavior });
+        scrollRoot().scrollTo({ top: 0, behavior });
         return;
       }
       document.getElementById(slug)?.scrollIntoView({ behavior });

@@ -11,14 +11,14 @@ Images are published to GitHub Container Registry as `ghcr.io/sandrinodm/logbroo
 
 | Tag | Meaning |
 | --- | --- |
-| `0.1.0` | The release version, without the Git tag's `v` prefix |
+| `0.2.0` | The release version, without the Git tag's `v` prefix |
 | `sha-<full-commit>` | The source commit of that release |
 | `latest` | Updated only when the maintainer selects it, and only for a stable version |
 
 Pull a version:
 
 ```sh
-docker pull ghcr.io/sandrinodm/logbrook:0.1.0
+docker pull ghcr.io/sandrinodm/logbrook:0.2.0
 ```
 
 To get the same image every time, pull by digest. `docker pull` prints the digest, and the GitHub release notes include a `docker pull` command:
@@ -43,7 +43,7 @@ Versions follow SemVer. The release workflow keeps five version fields in agreem
 - the default image version in `Dockerfile`
 - `info.version` in `src/openapi.json`
 
-The Git tag is the version with a `v` prefix, for example `v0.1.0`. Prerelease versions such as `0.2.0-rc.1` produce a GitHub prerelease and can't be marked latest.
+The Git tag is the version with a `v` prefix, for example `v0.2.0`. Prerelease versions such as `0.3.0-rc.1` produce a GitHub prerelease and can't be marked latest.
 
 ## How a release is made
 
@@ -57,20 +57,20 @@ Commit and push everything that should be in the release.
 Open **Actions → Release → Run workflow** and select `main`.
 </Step>
 <Step title="Choose a version request">
-Use `current` for the first release (`0.1.0`), or one of the values below. Write explicit versions without a leading `v`.
+Use `current` to release the version already in `Cargo.toml`, or one of the values below. Write explicit versions without a leading `v`.
 </Step>
 <Step title="Decide on latest">
 Enable **Also mark a stable release as latest** to update both the GHCR `latest` tag and GitHub's latest release.
 </Step>
 </Steps>
 
-| Version request | Result when `Cargo.toml` contains `0.1.0` |
+| Version request | Result when `Cargo.toml` contains `0.2.0` |
 | --- | --- |
-| `current` | Release `0.1.0` without a version bump |
-| `patch` | Release `0.1.1` |
-| `minor` | Release `0.2.0` |
+| `current` | Release `0.2.0` without a version bump |
+| `patch` | Release `0.2.1` |
+| `minor` | Release `0.3.0` |
 | `major` | Release `1.0.0` |
-| `0.2.0-rc.1` | Release that exact prerelease version |
+| `0.3.0-rc.1` | Release that exact prerelease version |
 
 The workflow rejects downgrades, build metadata such as `+build.1`, and versions whose tag already exists. To promote a prerelease, enter its stable version explicitly. Commit messages never choose the increment; you do.
 
@@ -102,7 +102,7 @@ If the fix needs code changes, commit it and start a new release with a new vers
 
 ### Publish an existing tag
 
-The **Release image** workflow (`release.yml`) verifies and publishes an existing, pushed tag that matches the root application version. It doesn't create the tag or a GitHub release. The error `couldn't find remote ref refs/tags/v0.1.0` means the tag doesn't exist on the remote; run **Release** instead.
+The **Release image** workflow (`release.yml`) verifies and publishes an existing, pushed tag that matches the root application version. It doesn't create the tag or a GitHub release. The error `couldn't find remote ref refs/tags/v0.2.0` means the tag doesn't exist on the remote; run **Release** instead.
 
 ### Make the first package public
 

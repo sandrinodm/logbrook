@@ -75,7 +75,7 @@ now=$(jq -nr 'now * 1000 | floor')
 Both requests return:
 
 ```json
-{"accepted":2}
+{ "accepted": 2 }
 ```
 
 `accepted` is the number of events committed. A `200` means the whole batch is stored.
@@ -131,7 +131,7 @@ Limit batches by serialized bytes as well as event count. Operators can change t
 
 ## Responses and errors
 
-Errors are JSON objects like `{"error":"explanation"}`. The text is for people, so don't parse it.
+Errors are JSON objects like `{ "error": "explanation" }`. The text is for people, so don't parse it.
 
 | Status | Meaning | What to do |
 | --- | --- | --- |

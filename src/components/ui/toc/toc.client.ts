@@ -5,6 +5,7 @@
  */
 
 import { mount } from "@cloudflare/nimbus-docs/client";
+import { scrollRoot } from "@/lib/scroll-root";
 
 const READING_BAND = 0.25;
 const BOTTOM_EPSILON = 2;
@@ -188,8 +189,8 @@ function initToc(root: HTMLElement): () => void {
   observed.forEach((o) => spy.observe(o.el));
 
   function updateBottom() {
-    const scrollEl = document.scrollingElement ?? document.documentElement;
-    const maxScroll = scrollEl.scrollHeight - window.innerHeight;
+    const scrollEl = scrollRoot();
+    const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
     const next =
       maxScroll > BOTTOM_EPSILON &&
       scrollEl.scrollTop >= maxScroll - BOTTOM_EPSILON;
@@ -309,7 +310,10 @@ function initToc(root: HTMLElement): () => void {
     { signal: controller.signal },
   );
 
+  // Captured, because the scrolling element may be the area under the header
+  // (see @/lib/scroll-root) and scroll events don't bubble.
   window.addEventListener("scroll", onScroll, {
+    capture: true,
     passive: true,
     signal: controller.signal,
   });

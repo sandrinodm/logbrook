@@ -22,7 +22,7 @@ logbrook count checkout --since 1h --service api --min-level 50
 logbrook count checkout --since 1h --min-level 50 --json
 ```
 
-The output is a bare number, or `{"count":5}` with `--json`.
+The output is a bare number, or `{ "count": 5 }` with `--json`.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -36,13 +36,13 @@ curl --fail-with-body --silent --show-error --get \
 ```
 
 ```json
-{"count":5}
+{ "count": 5 }
 ```
 
 </TabItem>
 </Tabs>
 
-A window with no matches returns `{"count":0}`.
+A window with no matches returns `{ "count": 0 }`.
 
 ## Facets
 
@@ -60,9 +60,9 @@ The response has five arrays: `services`, `loggers`, `hosts`, `levels` and `sour
 
 ```json
 [
-  {"value":"api","count":9},
-  {"value":"worker","count":2},
-  {"value":"auth","count":1}
+  { "value": "api", "count": 9 },
+  { "value": "worker", "count": 2 },
+  { "value": "auth", "count": 1 }
 ]
 ```
 
@@ -86,14 +86,14 @@ curl --fail-with-body --silent --show-error --get \
 ```
 
 ```json
-{"buckets":[{"time":1791370000000,"count":3}]}
+{ "buckets": [{ "time": 1791370000000, "count": 3 }] }
 ```
 
 - `time` is the bucket start in Unix milliseconds, counted from the exact `from` you sent.
 - Buckets come in ascending order.
 - Empty buckets are left out. Fill them with zeros when charting.
 - The last bucket can be shorter than the interval.
-- An empty histogram is `{"buckets":[]}`.
+- An empty histogram is `{ "buckets": [] }`.
 
 ### Bucket size and limit
 

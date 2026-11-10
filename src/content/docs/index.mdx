@@ -10,10 +10,6 @@ Logbrook is a self-hosted log search server for structured application logs. One
 
 ![Logbrook](../../assets/logbrook-banner.webp)
 
-<Aside type="caution" title="Pre-release software">
-Logbrook is at version 0.1.0. APIs and storage formats may change before a stable release.
-</Aside>
-
 ## Try it
 
 This starts Logbrook with throwaway credentials and no persistent volume. The [quickstart](/get-started/quickstart/) walks through sending and searching an event.
@@ -22,7 +18,7 @@ This starts Logbrook with throwaway credentials and no persistent volume. The [q
 docker run --rm -p 127.0.0.1:3100:3100 \
   -e LOGBROOK_INGEST_TOKEN="$(openssl rand -hex 24)" \
   -e LOGBROOK_READ_TOKEN="$(openssl rand -hex 24)" \
-  ghcr.io/sandrinodm/logbrook:0.1.0
+  ghcr.io/sandrinodm/logbrook:0.2.0
 ```
 
 <div class="flex flex-wrap gap-3">

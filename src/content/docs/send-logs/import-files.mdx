@@ -52,7 +52,7 @@ logbrook --config logbrook.toml --index payments import events.json --source che
 On success the command prints the number of events committed:
 
 ```text
-{"imported":1250}
+{ "imported": 1250 }
 ```
 
 </Step>
@@ -85,7 +85,7 @@ A new index still counts against `max_indexes`, and the command fails if creatin
 
 Each batch commits on its own. If a later batch is invalid or the process stops, earlier batches stay in the index. Rerunning the whole import then stores them a second time, because Logbrook doesn't deduplicate.
 
-For a clean retry, import into a new data directory. The `{"imported":N}` line is printed only after a complete run, so for a failed run use the error message: an over-long NDJSON line reports how many events were already committed.
+For a clean retry, import into a new data directory. The `{ "imported": N }` line is printed only after a complete run, so for a failed run use the error message: an over-long NDJSON line reports how many events were already committed.
 
 ## Next steps
 

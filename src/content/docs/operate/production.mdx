@@ -35,7 +35,7 @@ docker run -d --name logbrook \
   -v logbrook-data:/data \
   -e LOGBROOK_INGEST_TOKEN \
   -e LOGBROOK_READ_TOKEN \
-  ghcr.io/sandrinodm/logbrook:0.1.0
+  ghcr.io/sandrinodm/logbrook:0.2.0
 ```
 
 | Setting | Why |
@@ -47,7 +47,7 @@ docker run -d --name logbrook \
 | Publish on `127.0.0.1` | Logbrook serves plain HTTP. See [listen address and ports](#listen-address-and-ports). |
 
 <Aside type="note" title="Pin the image">
-Use a version tag such as `0.1.0` or a digest, not `latest`. See [Releases and container images](/project/releases/).
+Use a version tag such as `0.2.0` or a digest, not `latest`. See [Releases and container images](/project/releases/).
 </Aside>
 
 ## Own the data directory

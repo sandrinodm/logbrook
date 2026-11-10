@@ -80,7 +80,7 @@ jq -n --argjson until "$QUERY_TO_MS" '
     --data-binary @-
 ```
 
-The response is `{"accepted":12}`. The timestamps run from 50 minutes to one minute before `QUERY_TO_MS`, so a retention shorter than 50 minutes rejects the batch.
+The response is `{ "accepted": 12 }`. The timestamps run from 50 minutes to one minute before `QUERY_TO_MS`, so a retention shorter than 50 minutes rejects the batch.
 
 | Fixture fields | Values |
 | --- | --- |
@@ -140,7 +140,7 @@ query_window --min-level 40
 count_window --min-level 40
 
 # Error and above, including fatal: demo has 5.
-count_window --min-level 50 --json    # {"count":5}
+count_window --min-level 50 --json    # { "count": 5 }
 
 # Fatal and above: demo has 1.
 query_window --min-level 60
@@ -193,8 +193,8 @@ count_window --message ord-42
 ## Recipe 5: Look up one request by attribute
 
 ```sh
-query_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
-count_window --filter '{"attributes":[{"key":"requestId","op":"eq","value":"req-004"}]}' --json
+query_window --filter '{ "attributes": [{ "key": "requestId", "op": "eq", "value": "req-004" }] }' --json
+count_window --filter '{ "attributes": [{ "key": "requestId", "op": "eq", "value": "req-004" }] }' --json
 ```
 
 Both find the one matching demo event (`payment declined order=ord-42`). Matching is exact and typed: a number never matches a string. See [attribute filters](/query/attribute-filters/).
@@ -267,7 +267,7 @@ jq -s 'map(select((.attributes.durationMs // 0) >= 1000))
   | map({service: .[0].service, slow_requests: length})' query-export.ndjson
 ```
 
-The demo result is `[{"service":"api","slow_requests":3}]`. `jq -s` loads the whole export into memory. For JSON and CSV projections, see [pagination and export](/query/pagination-and-export/).
+The demo result is `[{ "service": "api", "slow_requests": 3 }]`. `jq -s` loads the whole export into memory. For JSON and CSV projections, see [pagination and export](/query/pagination-and-export/).
 
 ## Recipe 9: Query over HTTP
 

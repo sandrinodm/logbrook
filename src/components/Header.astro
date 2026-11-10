@@ -4,7 +4,6 @@ import type { SidebarSection } from "@cloudflare/nimbus-docs/types";
 import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
 import { Button } from "./ui/button";
 import { LinkButton } from "./ui/link-button";
-import { ThemeToggle } from "./ui/theme-toggle";
 import SearchTrigger from "./ui/search/SearchTrigger.astro";
 import { config } from "virtual:nimbus/config";
 import { getCollectionUrl, getSidebarSections, stripBase, withBase } from "@cloudflare/nimbus-docs/runtime";
@@ -60,7 +59,10 @@ const resolveSectionHref = (href: string): string =>
   withBase(href, import.meta.env.BASE_URL);
 ---
 
-<header class="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur-lg">
+{/* Named for page transitions so the bar is its own layer, drawn above the
+    content's. Without it, the outgoing page's content, which reaches up behind
+    the bar when the page is scrolled, shows through the bar while it fades. */}
+<header class="nb-brand-header sticky top-0 z-30 border-b" transition:name="nb-header" transition:animate="none">
   <div class="mx-auto flex items-center justify-between gap-3 h-14 px-4 lg:px-6">
     <div class="flex items-center gap-3 min-w-0">
       <slot name="brand">
@@ -73,7 +75,7 @@ const resolveSectionHref = (href: string): string =>
       </slot>
 
       {showSections && (
-        <nav aria-label="Sections" class="hidden md:flex items-center gap-1 ms-4 ps-4 border-s border-border h-6 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <nav aria-label="Sections" class="hidden md:flex items-center gap-1 ms-4 ps-4 border-s border-border h-6 min-w-0 overflow-x-auto overflow-y-hidden [scrollbar-width:none]! [&::-webkit-scrollbar]:hidden!">
           {sections.map((section) => (
             <a
               href={resolveSectionHref(section.href)}
@@ -109,7 +111,6 @@ const resolveSectionHref = (href: string): string =>
           <Icon name="ph:github-logo" class="w-4 h-4" />
         </LinkButton>
       )}
-      <ThemeToggle />
       {showSidebar && (
         <Button
           variant="ghost"
@@ -125,7 +126,7 @@ const resolveSectionHref = (href: string): string =>
   </div>
   {/* Phones: the tabs on a row of their own under the bar. */}
   {showSections && (
-    <nav aria-label="Sections" data-nb-header-tabs class="md:hidden flex items-center gap-1 h-10 px-4 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <nav aria-label="Sections" data-nb-header-tabs class="md:hidden flex items-center gap-1 h-10 px-4 overflow-x-auto overflow-y-hidden [scrollbar-width:none]! [&::-webkit-scrollbar]:hidden!">
       {sections.map((section) => (
         <a
           href={resolveSectionHref(section.href)}

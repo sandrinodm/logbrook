@@ -64,7 +64,7 @@ Live ingestion checks event time against the clock and the retention window:
 Logbrook validates a batch as a whole: one invalid event rejects the request and stores nothing. A valid batch is committed in one storage transaction, and only then does the response report the number of accepted events:
 
 ```json
-{"accepted": 2}
+{ "accepted": 2 }
 ```
 
 An accepted batch is therefore durable.

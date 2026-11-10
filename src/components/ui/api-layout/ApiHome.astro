@@ -85,6 +85,7 @@ if (rows.length > 0 && !home) {
 
 <script>
   import { navigate } from "astro:transitions/client";
+  import { scrollRoot } from "@/lib/scroll-root";
   import { loadNavList, matchNavList, type NavListRow } from "@cloudflare/nimbus-docs/client";
 
   type Later = { href: string; label: string };
@@ -211,12 +212,12 @@ if (rows.length > 0 && !home) {
           await loadNext();
           if (loaded === before) break;
         }
-        window.scrollTo(0, saved.y);
+        scrollRoot().scrollTo(0, saved.y);
       })();
     }
     const save = () => {
       try {
-        sessionStorage.setItem(stateKey, JSON.stringify({ loaded, y: window.scrollY }));
+        sessionStorage.setItem(stateKey, JSON.stringify({ loaded, y: scrollRoot().scrollTop }));
       } catch {}
     };
     window.addEventListener("pagehide", save, { signal: leave.signal });

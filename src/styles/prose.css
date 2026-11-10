@@ -1,10 +1,10 @@
 /* Docs markdown styling scoped to docs content containers only.
-   Every size and line height is a whole pixel on a 4px grid: body 16/28,
+   Every size and line height is a whole pixel on a 4px grid: body 15/24,
    small text 14/24, headings from the --nb-h* tokens in globals.css. */
 
 .docs-content {
-  font-size: 1rem;
-  line-height: 1.75rem;
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
   color: var(--nb-foreground);
   /* Break a long unbroken token (URL, hash, no-space string) so it wraps within
      the content column instead of leaking past the page width. Inherited, so it
@@ -19,7 +19,7 @@
    Components can override with their own margin utilities (my-4, mt-6, etc.)
    because :where() keeps specificity at (0,1,0) and utilities come later. */
 .docs-content > :where(:not(:first-child)) {
-  margin-top: 1.25rem;
+  margin-top: 1rem;
 }
 
 .docs-content :where(ul:not([class])) {
@@ -88,7 +88,7 @@
   line-height: var(--nb-h2-leading);
   font-weight: var(--nb-h2-weight);
   letter-spacing: var(--nb-h2-tracking);
-  margin-top: 3rem;
+  margin-top: 2.5rem;
 }
 
 .docs-content :where(h3:not([class])) {
@@ -96,12 +96,12 @@
   line-height: var(--nb-h3-leading);
   font-weight: var(--nb-h3-weight);
   letter-spacing: var(--nb-h3-tracking);
-  margin-top: 2.25rem;
+  margin-top: 1.75rem;
 }
 
 .docs-content :where(h4:not([class]), h5:not([class]), h6:not([class])) {
   font-weight: var(--nb-h4-weight);
-  margin-top: 1.75rem;
+  margin-top: 1.5rem;
 }
 
 .docs-content > :where(h2:not([class]), h3:not([class]), h4:not([class])) + * {

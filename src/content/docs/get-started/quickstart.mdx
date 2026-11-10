@@ -30,7 +30,7 @@ Docker, plus `curl` and `openssl` on the host.
       -p 127.0.0.1:3100:3100 \
       -e LOGBROOK_INGEST_TOKEN \
       -e LOGBROOK_READ_TOKEN \
-      ghcr.io/sandrinodm/logbrook:0.1.0
+      ghcr.io/sandrinodm/logbrook:0.2.0
     ```
 
     Check that it is up:
@@ -48,11 +48,11 @@ Docker, plus `curl` and `openssl` on the host.
     curl --fail http://127.0.0.1:3100/indexes/payments/logs/ingest \
       -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
       -H 'Content-Type: application/json' \
-      --data "[{\"time\":$(( $(date +%s) * 1000 )),\"level\":30,\"service\":\"checkout\",\"msg\":\"Order accepted\",\"orderId\":\"demo-1\"}]"
+      --data "[{ \"time\": $(( $(date +%s) * 1000 )), \"level\": 30, \"service\": \"checkout\", \"msg\": \"Order accepted\", \"orderId\": \"demo-1\" }]"
     ```
 
     ```json
-    {"accepted":1}
+    { "accepted": 1 }
     ```
 
     `time` is a Unix timestamp in milliseconds, `level` is a nonnegative integer (30 is Pino's `info`), and `msg` is the message. Other fields, such as `orderId`, become attributes.
@@ -85,7 +85,7 @@ Docker, plus `curl` and `openssl` on the host.
 </Steps>
 
 <Aside type="note" title="Image tags">
-The `0.1.0` tag is the release version without the Git `v` prefix. See [Releases and container images](/project/releases/) for the tags that exist.
+The `0.2.0` tag is the release version without the Git `v` prefix. See [Releases and container images](/project/releases/) for the tags that exist.
 </Aside>
 
 ## Next steps

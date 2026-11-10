@@ -15,19 +15,19 @@ Named routes address one index per request. The unprefixed routes address the `d
 
 | Method and path | Credential | Success |
 | --- | --- | --- |
-| `POST /indexes/{index}/logs/ingest` | Ingestion | `200`, `{"accepted":N}` after the batch is committed |
-| `GET /indexes/{index}/logs` | Read | `200`, `{"events":[...],"next_cursor":...}` |
-| `GET /indexes/{index}/logs/count` | Read | `200`, `{"count":N}` |
+| `POST /indexes/{index}/logs/ingest` | Ingestion | `200`, `{ "accepted": N }` after the batch is committed |
+| `GET /indexes/{index}/logs` | Read | `200`, `{ "events": [...], "next_cursor": ... }` |
+| `GET /indexes/{index}/logs/count` | Read | `200`, `{ "count": N }` |
 | `GET /indexes/{index}/logs/facets` | Read | `200`, five arrays of value and count pairs |
-| `GET /indexes/{index}/logs/histogram` | Read | `200`, `{"buckets":[...]}` |
+| `GET /indexes/{index}/logs/histogram` | Read | `200`, `{ "buckets": [...] }` |
 | `GET /indexes/{index}/logs/tail` | Read | `200`, `text/event-stream` |
-| `GET /indexes` | Read or admin | `200`, `{"indexes":[...]}` |
+| `GET /indexes` | Read or admin | `200`, `{ "indexes": [...] }` |
 | `GET /indexes/{index}` | Read or admin | `200`, index information |
-| `PUT /indexes/{index}` | Ingestion or admin | `200`, `{"name":"..."}` |
-| `DELETE /indexes/{index}` | Admin | `200`, `{"deleted":"..."}` |
+| `PUT /indexes/{index}` | Ingestion or admin | `200`, `{ "name": "..." }` |
+| `DELETE /indexes/{index}` | Admin | `200`, `{ "deleted": "..." }` |
 | `GET /metrics` | Unrestricted read | `200`, Prometheus text |
-| `GET /health` | None | `200`, `{"status":"ok"}` |
-| `GET /ready` | None | `200`, `{"status":"ready"}`, or `503` |
+| `GET /health` | None | `200`, `{ "status": "ok" }` |
+| `GET /ready` | None | `200`, `{ "status": "ready" }`, or `503` |
 | `GET /openapi.json` | None | `200`, OpenAPI JSON |
 
 The default-index routes are `/logs`, `/logs/ingest`, `/logs/count`, `/logs/facets`, `/logs/histogram` and `/logs/tail`. They follow the same credential rules. Use the named routes in new clients: cursors and tail IDs from the two route styles are not interchangeable, even for `default`.
@@ -53,13 +53,13 @@ curl --fail-with-body --silent --show-error \
   "$LOGBROOK_URL/indexes/checkout/logs/ingest" \
   -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data "[{\"time\":$now,\"level\":50,\"msg\":\"payment timeout\",\"service\":\"checkout\"}]"
+  --data "[{ \"time\": $now, \"level\": 50, \"msg\": \"payment timeout\", \"service\": \"checkout\" }]"
 ```
 
 The event time must fall inside the retention window (seven days by default), so the example uses the current time.
 
 ```json
-{"accepted":1}
+{ "accepted": 1 }
 ```
 
 - The body is a nonempty JSON array of objects, even for one event. For NDJSON send `Content-Type: application/x-ndjson` (or `application/ndjson`) with one object per line. Other media types return `400`.
@@ -85,13 +85,13 @@ Search results look like this:
     "event_time": 1791453599000, "received_at": 1791453600000,
     "level": 50, "service": "checkout", "logger": "http",
     "host": "api-1", "pid": null, "message": "payment timeout",
-    "attributes": {"requestId": "demo-002"}
+    "attributes": { "requestId": "demo-002" }
   }],
   "next_cursor": null
 }
 ```
 
-Facets return `services`, `loggers`, `hosts`, `levels` and `sources`, each with at most 100 `{"value","count"}` pairs. Histograms return `{"buckets":[{"time":...,"count":...}]}` with at most 2,000 buckets per request.
+Facets return `services`, `loggers`, `hosts`, `levels` and `sources`, each with at most 100 `{ "value", "count" }` pairs. Histograms return `{ "buckets": [{ "time": ..., "count": ... }] }` with at most 2,000 buckets per request.
 
 ## Index management
 
@@ -114,13 +114,13 @@ An index name has 1 to 63 lowercase ASCII letters, digits, `-` or `_`, and start
 }
 ```
 
-A read token restricted to particular sources gets only `{"name":"checkout"}`. `max_size_bytes: null` means no size limit.
+A read token restricted to particular sources gets only `{ "name": "checkout" }`. `max_size_bytes: null` means no size limit.
 
 `DELETE` needs an admin token. `default` and indexes declared in the server configuration cannot be deleted (`400`). A later ingestion recreates a deleted name, so stop producers first.
 
 ## Errors
 
-Errors are JSON objects: `{"error":"explanation"}`. The text is for people, so rely on the status code.
+Errors are JSON objects: `{ "error": "explanation" }`. The text is for people, so rely on the status code.
 
 | Status | Meaning | Client action |
 | --- | --- | --- |

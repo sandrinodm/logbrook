@@ -88,7 +88,7 @@ docker run -d --name logbrook-restore \
   -v logbrook_restore:/data \
   -e LOGBROOK_INGEST_TOKEN \
   -e LOGBROOK_READ_TOKEN \
-  ghcr.io/sandrinodm/logbrook:0.1.0
+  ghcr.io/sandrinodm/logbrook:0.2.0
 ```
 </Step>
 <Step title="Verify before switching producers">
@@ -128,7 +128,7 @@ Stop the service, switch the image tag, and start it again. Pin the tag; see [Re
 To roll back, restore the pre-upgrade backup together with the previous binary or image. Do not run the previous binary on data the new version already migrated.
 
 <Aside type="note" title="Pre-release software">
-Logbrook is at version 0.1.0 and its APIs and storage formats may change before a stable release. Read the release notes before each upgrade.
+Logbrook is at version 0.2.0 and its APIs and storage formats may change before a stable release. Read the release notes before each upgrade.
 </Aside>
 
 ## Next steps

@@ -11,8 +11,8 @@ Logbrook serves a liveness endpoint, a readiness endpoint and Prometheus metrics
 
 | Endpoint | Auth | Success | Failure |
 | --- | --- | --- | --- |
-| `GET /health` | None | `200` `{"status":"ok"}` | None: it only shows the process answers |
-| `GET /ready` | None | `200` `{"status":"ready"}` | `503` with an error object |
+| `GET /health` | None | `200` `{ "status": "ok" }` | None: it only shows the process answers |
+| `GET /ready` | None | `200` `{ "status": "ready" }` | `503` with an error object |
 | `GET /metrics` | Read token | `200`, Prometheus text | `401`, `403`, `429` |
 
 `/health` is a liveness check. `/ready` returns `503` when any index's storage is unavailable. On integrity failures and broken database connections, Logbrook marks the server unready and shuts it down. Recoverable maintenance failures do not affect readiness: reads and ingestion keep working while maintenance retries with exponential backoff, up to 15 minutes between attempts.

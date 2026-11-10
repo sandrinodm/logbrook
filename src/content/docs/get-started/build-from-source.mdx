@@ -51,11 +51,11 @@ If `cargo` is not found right after installing Rust, run `. "$HOME/.cargo/env"` 
     curl --fail http://127.0.0.1:3100/indexes/payments/logs/ingest \
       -H "Authorization: Bearer $LOGBROOK_INGEST_TOKEN" \
       -H 'Content-Type: application/json' \
-      --data "[{\"time\":$(( $(date +%s) * 1000 )),\"level\":30,\"service\":\"checkout\",\"msg\":\"Order accepted\",\"orderId\":\"demo-1\"}]"
+      --data "[{ \"time\": $(( $(date +%s) * 1000 )), \"level\": 30, \"service\": \"checkout\", \"msg\": \"Order accepted\", \"orderId\": \"demo-1\" }]"
     ```
 
     ```json
-    {"accepted":1}
+    { "accepted": 1 }
     ```
 
     The first authorized write to a new index creates it.

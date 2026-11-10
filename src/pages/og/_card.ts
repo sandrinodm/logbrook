@@ -56,7 +56,7 @@ const Logo = (height: number): CardNode => ({
     width: Math.round((height * logo.width) / logo.height),
     height,
     viewBox: `0 0 ${logo.width} ${logo.height}`,
-    children: logo.paths.map((d) => ({ type: "path", props: { d, fill: FOREGROUND } })),
+    children: logo.paths.map((d) => ({ type: "path", props: { d, fill: "none", stroke: FOREGROUND, strokeWidth: logo.strokeWidth, strokeLinecap: "round" } })),
   },
 });
 

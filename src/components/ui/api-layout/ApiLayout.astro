@@ -96,7 +96,7 @@ if (versionStatus?.isHidden || homePart) {
 >
   <div
     data-mobile-sidebar-panel
-    class="flex h-full w-(--nb-sidebar-width) max-w-[85vw] -translate-x-full flex-col border-e border-border bg-card transition-transform duration-250 ease-out group-data-[state=open]:translate-x-0 rtl:translate-x-full rtl:group-data-[state=open]:translate-x-0 motion-reduce:transition-none"
+    class="nb-brand-surface flex h-full w-(--nb-sidebar-width) max-w-[85vw] -translate-x-full flex-col border-e border-border bg-card transition-transform duration-250 ease-out group-data-[state=open]:translate-x-0 rtl:translate-x-full rtl:group-data-[state=open]:translate-x-0 motion-reduce:transition-none"
   >
     <div class="z-[1] flex items-center justify-between border-b border-border bg-card px-4 py-3">
       <span class="text-sm font-semibold text-foreground">Navigation</span>
@@ -114,7 +114,7 @@ if (versionStatus?.isHidden || homePart) {
   </div>
 </dialog>
 
-<div class="flex w-full">
+<div class="nb-scroll-root flex w-full">
   {/* The rail keeps its open groups and scroll across pages: the inline script
       below restores them before paint, and `initNavSidebar` records them. It is
       excluded from the page transition so it never fades or replays. */}
@@ -122,7 +122,7 @@ if (versionStatus?.isHidden || homePart) {
     aria-label="Sidebar"
     transition:name="nb-api-sidebar"
     transition:animate="none"
-    class="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 flex-col border-e border-border bg-background md:flex lg:w-(--nb-sidebar-width)"
+    class="nb-brand-surface sticky top-(--nb-header-height) hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 flex-col border-e border-border bg-background md:flex lg:w-(--nb-sidebar-width)"
   >
     <div
       data-nb-api-tree
@@ -188,13 +188,13 @@ if (versionStatus?.isHidden || homePart) {
         at 90rem+ it becomes the sticky right column. The left padding keeps overflow-y-auto
         from clipping the LayerCard's outset ring at the scroll edge. */}
     {!hasRail && tocHeadings.length > 0 && (
-      <aside aria-label="On this page" data-nb-toc-scroll-host class="hidden xl:block w-(--nb-toc-width) shrink-0 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto">
+      <aside aria-label="On this page" data-nb-toc-scroll-host class="hidden xl:block w-(--nb-toc-width) shrink-0 sticky top-(--nb-header-height) h-[calc(100vh-3.5rem)] overflow-y-auto">
         <div class="pt-8 pb-8 ps-8 pe-6"><TOC headings={tocHeadings} /></div>
       </aside>
     )}
 
     {hasRail && (
-      <div class="mx-auto w-full max-w-(--nb-content-max) px-4 pb-12 md:px-8 min-[90rem]:col-start-2 min-[90rem]:row-span-2 min-[90rem]:row-start-1 min-[90rem]:mx-0 min-[90rem]:max-w-none min-[90rem]:sticky min-[90rem]:top-14 min-[90rem]:h-[calc(100vh-3.5rem)] min-[90rem]:w-[29rem] min-[90rem]:shrink-0 min-[90rem]:overflow-y-auto min-[90rem]:pt-8 min-[90rem]:pe-6 min-[90rem]:pb-8 min-[90rem]:ps-1 2xl:w-(--nb-code-rail-width)">
+      <div class="mx-auto w-full max-w-(--nb-content-max) px-4 pb-12 md:px-8 min-[90rem]:col-start-2 min-[90rem]:row-span-2 min-[90rem]:row-start-1 min-[90rem]:mx-0 min-[90rem]:max-w-none min-[90rem]:sticky min-[90rem]:top-(--nb-header-height) min-[90rem]:h-[calc(100vh-3.5rem)] min-[90rem]:w-[29rem] min-[90rem]:shrink-0 min-[90rem]:overflow-y-auto min-[90rem]:pt-8 min-[90rem]:pe-6 min-[90rem]:pb-8 min-[90rem]:ps-1 2xl:w-(--nb-code-rail-width)">
         <ApiCodeRail
           responses={page.responses}
           samples={page.samples}

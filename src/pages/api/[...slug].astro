@@ -33,8 +33,10 @@ const socialImage = new URL(page.href, Astro.url).search
   apiVersion={version ?? undefined}
   coordinate={coordinate}
 >
+  <div class="nb-app">
   <Header showSidebar collection={collection}>
     <VersionSwitcher slot="actions" apiCollection={collection} apiVersion={version} coordinate={coordinate} />
   </Header>
   <ApiLayout page={page} nav={nav} collection={collection} version={version} coordinate={coordinate} home={home} />
+  </div>
 </BaseLayout>

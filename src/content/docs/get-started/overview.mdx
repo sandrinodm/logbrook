@@ -9,10 +9,6 @@ Logbrook is a self-hosted log search server for structured application logs. It 
 
 ![Logbrook](../../../assets/logbrook-banner.webp)
 
-<Aside type="caution" title="Pre-release software">
-Logbrook is at version 0.1.0. APIs and storage formats may change before a stable release.
-</Aside>
-
 ## What it does
 
 Logbrook receives JSON logs over HTTP, stores recent events in an embedded DuckDB database, moves older events into local Parquet files, and searches both through its CLI and HTTP API. It needs no external database or message queue.
