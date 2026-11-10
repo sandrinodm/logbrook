@@ -26,7 +26,7 @@ RUN strip --strip-unneeded /usr/local/bin/logbrook \
 # cc supplies the glibc/C++ runtime required by bundled DuckDB, plus CA roots.
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS runtime
 ARG VCS_REF=unknown
-ARG VERSION=0.1.0
+ARG VERSION=0.2.0
 LABEL org.opencontainers.image.title="logbrook" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.description="Self-hosted log search with DuckDB and Parquet" \
