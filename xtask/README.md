@@ -89,7 +89,7 @@ Run the scheduling, shutdown and accounting unit tests with `cargo test --packag
 
 ### Attribute queries
 
-`attribute-load` generates deterministic run, actor and video data, imports it offline, archives the requested share and starts a server on it. It checks search IDs, counts, histogram buckets and facet values against answers computed from the fixture. The `queries` profile also checks missing and single-value selections, sixteen conditions and later cursor pages.
+`attribute-load` generates deterministic run, user and session data, imports it offline, archives the requested share and starts a server on it. It checks search IDs, counts, histogram buckets and facet values against answers computed from the fixture. The `queries` profile also checks missing and single-value selections, sixteen conditions and later cursor pages.
 
 For a short container run, build a local image and run every profile with smaller settings:
 
@@ -114,7 +114,7 @@ cargo xtask attribute-load --image logbrook:attributes-local \
 
 Container runs get four CPUs, 1 GiB of memory and DuckDB's `memory_limit='512MB'`. Runs with `--binary` have no resource limits. `--hardware-provenance FILE` copies a JSON description of the host and its storage into the report; `--help` lists its fields.
 
-Add `--promoted-string-key runId --promoted-string-key actorJobId` to `attribute-load` or `attribute-compare` to test promoted attribute columns. The report records the server configuration in effect and uses the offline `projection-status` command to check that the fixture is fully covered.
+Add `--promoted-string-key runId --promoted-string-key userId` to `attribute-load` or `attribute-compare` to test promoted attribute columns. The report records the server configuration in effect and uses the offline `projection-status` command to check that the fixture is fully covered.
 
 ### Compare attribute query changes
 

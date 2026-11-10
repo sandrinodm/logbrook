@@ -108,16 +108,16 @@ pub(super) const MAX_PROMOTED_STRING_KEYS: usize = 8;
 /// Longest promoted string key, in bytes.
 pub(super) const MAX_PROMOTED_KEY_BYTES: usize = 256;
 
-/// Distinct actors per run in the fixture.
-pub(in crate::load) const ACTORS_PER_RUN: u64 = 10;
+/// Distinct users per run in the fixture.
+pub(in crate::load) const USERS_PER_RUN: u64 = 10;
 
-/// Distinct videos per actor in the fixture.
-pub(super) const VIDEOS_PER_ACTOR: u64 = 10;
+/// Distinct sessions per user in the fixture.
+pub(super) const SESSIONS_PER_USER: u64 = 10;
 
 /// Distinct hosts the fixture cycles through.
 pub(super) const HOST_COUNT: u64 = 8;
 
-/// Log level of every tenth video's events, which are the fixture's errors.
+/// Log level of every tenth session's events, which are the fixture's errors.
 pub(super) const ERROR_LEVEL: u64 = 50;
 
 /// Log level of all other fixture events.
@@ -151,8 +151,8 @@ pub(super) const FACET_DIMENSIONS: [&str; 5] =
 /// Attribute conditions of the maximum-shape filter, in the order they are sent.
 pub(super) const MAXIMUM_FILTER_KEYS: [&str; 16] = [
     "runId",
-    "actorJobId",
-    "videoId",
+    "userId",
+    "sessionId",
     "sequence",
     "active",
     "tag0",

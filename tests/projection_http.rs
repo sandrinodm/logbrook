@@ -43,7 +43,7 @@ async fn durable_projection_keeps_http_auth_cursor_binding_and_selection_semanti
         config.storage.reader_threads = 1;
         config.storage.duckdb_threads = 1;
         config.storage.promoted_string_keys = if promoted {
-            vec!["runId".into(), "actorJobId".into()]
+            vec!["runId".into(), "userId".into()]
         } else {
             vec![]
         };
@@ -56,9 +56,9 @@ async fn durable_projection_keeps_http_auth_cursor_binding_and_selection_semanti
         for source in ["alpha", "beta"] {
             let events = logbrook::ingest::normalize(
                 &serde_json::to_vec(&json!([
-                    {"time":10,"level":30,"msg":"first","runId":"r","actorJobId":"a"},
-                    {"time":20,"level":30,"msg":"second","runId":"r","actorJobId":"a"},
-                    {"time":30,"level":30,"msg":"wrong type","runId":true,"actorJobId":"a"}
+                    {"time":10,"level":30,"msg":"first","runId":"r","userId":"a"},
+                    {"time":20,"level":30,"msg":"second","runId":"r","userId":"a"},
+                    {"time":30,"level":30,"msg":"wrong type","runId":true,"userId":"a"}
                 ]))
                 .unwrap(),
                 false,
@@ -73,7 +73,7 @@ async fn durable_projection_keeps_http_auth_cursor_binding_and_selection_semanti
         let app = router(storage.clone(), config);
 
         let filter = encoded(
-            r#"{"attributes":[{"key":"runId","op":"eq","value":"r"},{"key":"actorJobId","op":"eq","value":"a"}]}"#,
+            r#"{"attributes":[{"key":"runId","op":"eq","value":"r"},{"key":"userId","op":"eq","value":"a"}]}"#,
         );
         let path = format!("/logs?from=0&to=100&limit=1&filter={filter}");
         let (status, first) = get(&app, &path).await;
@@ -87,7 +87,7 @@ async fn durable_projection_keeps_http_auth_cursor_binding_and_selection_semanti
         assert_eq!(second["events"][0]["message"], "first");
 
         let equivalent = encoded(
-            r#"{"attributes":[{"key":"actorJobId","op":"eq","value":"a"},{"key":"runId","op":"eq","value":"r"}]}"#,
+            r#"{"attributes":[{"key":"userId","op":"eq","value":"a"},{"key":"runId","op":"eq","value":"r"}]}"#,
         );
         assert_eq!(
             get(
@@ -100,7 +100,7 @@ async fn durable_projection_keeps_http_auth_cursor_binding_and_selection_semanti
         );
 
         let changed = encoded(
-            r#"{"attributes":[{"key":"runId","op":"eq","value":"other"},{"key":"actorJobId","op":"eq","value":"a"}]}"#,
+            r#"{"attributes":[{"key":"runId","op":"eq","value":"other"},{"key":"userId","op":"eq","value":"a"}]}"#,
         );
         assert_eq!(
             get(

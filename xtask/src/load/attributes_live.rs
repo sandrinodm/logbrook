@@ -633,8 +633,8 @@ async fn query_job(context: &LiveContext, job: Job) -> Result<Completion> {
         usize::try_from(job.sequence % LIVE_QUERY_MIX_LEN).expect("query mix slot fits in usize");
     let operation = LIVE_QUERY_MIX[slot];
     let run = job.sequence % seed.runs;
-    let actor = Some(job.sequence / seed.runs % attributes::ACTORS_PER_RUN);
-    let mut params = attributes::query_params(seed, run, actor);
+    let user = Some(job.sequence / seed.runs % attributes::USERS_PER_RUN);
+    let mut params = attributes::query_params(seed, run, user);
     if !context.comparison {
         params.remove("filter");
     }
@@ -649,7 +649,7 @@ async fn query_job(context: &LiveContext, job: Job) -> Result<Completion> {
     if status == HTTP_OK {
         result.counters.insert("completed_query".into(), 1);
         let correct = if context.comparison {
-            attributes::verify_response(seed, operation.name(), run, actor, &response)
+            attributes::verify_response(seed, operation.name(), run, user, &response)
         } else {
             attributes::verify_unfiltered_response(seed, operation.name(), &response)
         };

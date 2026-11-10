@@ -12,7 +12,7 @@ fn config(path: &Path, promoted: bool) -> StorageConfig {
     StorageConfig {
         data_dir: path.to_owned(),
         promoted_string_keys: if promoted {
-            vec!["run/~雪".into(), "actor".into()]
+            vec!["run/~雪".into(), "user".into()]
         } else {
             vec![]
         },
@@ -67,61 +67,61 @@ fn rows() -> Vec<NormalizedEvent> {
     [
         json!({
             "run/~雪": "é\n\u{0}",
-            "actor": "a",
+            "user": "a",
             "active": true,
             "n": 9007199254740993_u64,
         }),
         json!({
             "run/~雪": "é\n\u{0}",
-            "actor": "a",
+            "user": "a",
             "active": true,
             "n": 9007199254740993_u64,
         }),
         json!({
             "run/~雪": "é\n\u{0}",
-            "actor": "b",
+            "user": "b",
             "active": true,
             "n": 9007199254740993_u64,
         }),
         json!({
             "run/~雪": "é\n\u{0}",
-            "actor": "a",
+            "user": "a",
             "active": false,
             "n": 9007199254740993_u64,
         }),
         json!({
             "run/~雪": "e\u{301}\n\u{0}",
-            "actor": "a",
+            "user": "a",
             "active": true,
         }),
         json!({
             "run/~雪": true,
-            "actor": "a",
+            "user": "a",
             "active": true,
         }),
         json!({
             "run/~雪": 123,
-            "actor": "a",
+            "user": "a",
         }),
         json!({
             "run/~雪": null,
-            "actor": "a",
+            "user": "a",
         }),
         json!({
             "run/~雪": ["é\n\u{0}"],
-            "actor": "a",
+            "user": "a",
         }),
         json!({
             "run/~雪": {
                 "value": "é\n\u{0}",
             },
-            "actor": "a",
+            "user": "a",
         }),
         json!(["é\n\u{0}", "a"]),
         json!("é\n\u{0}"),
         Value::Null,
         json!({
-            "actor": "a",
+            "user": "a",
         }),
     ]
     .into_iter()
@@ -248,22 +248,22 @@ async fn serde_oracle_covers_hot_legacy_typed_mixed_backfill_and_restart() {
         }
 
         let db = Storage::open(config(dir.path(), true)).unwrap();
-        assert_oracle(&db, &data[..4], &[("actor", json!("a"))]).await;
+        assert_oracle(&db, &data[..4], &[("user", json!("a"))]).await;
         db.append("source".into(), data[4..].to_vec())
             .await
             .unwrap();
 
         let conditions = [
             vec![("run/~雪", json!("é\n\u{0}"))],
-            vec![("run/~雪", json!("é\n\u{0}")), ("actor", json!("a"))],
+            vec![("run/~雪", json!("é\n\u{0}")), ("user", json!("a"))],
             vec![
                 ("run/~雪", json!("é\n\u{0}")),
-                ("actor", json!("a")),
+                ("user", json!("a")),
                 ("active", json!(true)),
                 ("n", json!(9007199254740993_u64)),
             ],
             vec![("run/~雪", json!(true))],
-            vec![("actor", json!("a"))],
+            vec![("user", json!("a"))],
         ];
         for conditions in &conditions {
             assert_oracle(&db, &data, conditions).await;
@@ -293,7 +293,7 @@ async fn projected_paging_highwater_late_ids_and_retention_preserve_boundaries()
     let dir = tempfile::tempdir().unwrap();
     let db = Storage::open(config(dir.path(), true)).unwrap();
     let attrs = json!({
-        "actor": "a",
+        "user": "a",
     });
     db.append(
         "s".into(),
@@ -303,7 +303,7 @@ async fn projected_paging_highwater_late_ids_and_retention_preserve_boundaries()
     .unwrap();
     db.archive(20).await.unwrap();
 
-    let q = query(&[("actor", json!("a"))]);
+    let q = query(&[("user", json!("a"))]);
     let first = db.search(q.clone()).await.unwrap();
     assert_eq!(
         first
@@ -377,7 +377,7 @@ async fn ordinary_sql_cannot_create_stale_or_invalid_covered_hot_rows() {
         vec![event(
             0,
             json!({
-                "actor": "a",
+                "user": "a",
                 "run/~雪": "r",
             }),
         )],
@@ -407,7 +407,7 @@ async fn ordinary_sql_cannot_create_stale_or_invalid_covered_hot_rows() {
             .get::<_, String>(0))
             .unwrap(),
         json!({
-            "actor": "a",
+            "user": "a",
             "run/~雪": "r",
         })
         .to_string()
@@ -424,7 +424,7 @@ async fn ordinary_sql_cannot_create_stale_or_invalid_covered_hot_rows() {
     drop(conn);
 
     let db = Storage::open(config(dir.path(), false)).unwrap();
-    assert!(db.count(query(&[("actor", json!("a"))])).await.is_err());
+    assert!(db.count(query(&[("user", json!("a"))])).await.is_err());
     db.shutdown().await.unwrap();
 }
 
@@ -438,7 +438,7 @@ async fn single_legacy_archive_backfill_is_bounded_finishes_and_preserves_malfor
             vec![event(
                 0,
                 json!({
-                    "actor": "a",
+                    "user": "a",
                 }),
             )],
         )
@@ -469,7 +469,7 @@ async fn single_legacy_archive_backfill_is_bounded_finishes_and_preserves_malfor
             "typed output must not be rewritten forever"
         );
 
-        let result = db.count(query(&[("actor", json!("a"))])).await;
+        let result = db.count(query(&[("user", json!("a"))])).await;
         if malformed {
             assert!(result.is_err());
         } else {
@@ -485,7 +485,7 @@ async fn single_legacy_archive_backfill_is_bounded_finishes_and_preserves_malfor
         drop(db);
 
         let db = Storage::open(config(dir.path(), false)).unwrap();
-        let result = db.count(query(&[("actor", json!("a"))])).await;
+        let result = db.count(query(&[("user", json!("a"))])).await;
         if malformed {
             assert!(result.is_err());
         } else {
@@ -529,7 +529,7 @@ async fn same_size_typed_archive_tamper_is_integrity_error_for_queries_and_recov
 
     assert_eq!(std::fs::metadata(&path).unwrap().len(), before);
 
-    let q = query(&[("actor", json!("a"))]);
+    let q = query(&[("user", json!("a"))]);
     assert_eq!(
         db.count(q.clone()).await.unwrap_err().kind,
         ErrorKind::Integrity
@@ -597,14 +597,14 @@ async fn supported_legacy_versions_activate_without_rewriting_malformed_hot_json
         drop(conn);
 
         let db = Storage::open(config(dir.path(), true)).unwrap();
-        assert!(db.count(query(&[("actor", json!("a"))])).await.is_err());
+        assert!(db.count(query(&[("user", json!("a"))])).await.is_err());
 
         db.append(
             "s".into(),
             vec![event(
                 1,
                 json!({
-                    "actor": "a",
+                    "user": "a",
                 }),
             )],
         )
@@ -657,7 +657,7 @@ async fn oversized_legacy_archive_stays_queryable_without_exceeding_backfill_bud
     let status = db.projection_status().await.unwrap();
     assert_eq!(status.legacy_archive_files, 1);
     assert_eq!(status.archived_covered_rows, 0);
-    assert_eq!(db.count(query(&[("actor", json!("a"))])).await.unwrap(), 10);
+    assert_eq!(db.count(query(&[("user", json!("a"))])).await.unwrap(), 10);
     db.shutdown().await.unwrap();
 }
 

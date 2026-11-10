@@ -8,7 +8,7 @@ use std::time::Instant;
 /// Read operations in cell order. Cell `index` measures `OPERATIONS[index % 4]`.
 pub const OPERATIONS: [&str; 4] = ["search", "count", "histogram", "facets"];
 
-/// Number of cells: every operation over the run selection, then over the run-and-actor one.
+/// Number of cells: every operation over the run selection, then over the run-and-user one.
 pub const CELLS: usize = 8;
 
 /// Requests per batch. Every cell gets one batch per cycle of `CELLS` batches.
@@ -23,14 +23,14 @@ const RUN_STRIDE_START: u64 = 37;
 /// Cell rotation advances by this many cells for every batch cycle.
 const ROTATION_STEP: u64 = 3;
 
-/// Distinct actors per run; a query's actor is taken modulo this.
-const ACTORS: u64 = 10;
+/// Distinct users per run; a query's user is taken modulo this.
+const USERS: u64 = 10;
 
 /// Runs in the reference fixture, which the reference coverage check expects.
 const REFERENCE_RUN_COUNT: usize = 1000;
 
-/// Requests per actor that the reference coverage check expects.
-const REQUESTS_PER_ACTOR: u64 = 100;
+/// Requests per user that the reference coverage check expects.
+const REQUESTS_PER_USER: u64 = 100;
 
 /// Microseconds in one second, for converting CPU counters.
 const MICROS_PER_SECOND: f64 = 1_000_000.0;
@@ -60,7 +60,7 @@ pub fn cell(index: usize) -> (&'static str, &'static str) {
     let selection = if index < OPERATIONS.len() {
         "run"
     } else {
-        "run_actor"
+        "run_user"
     };
     (selection, OPERATIONS[index % OPERATIONS.len()])
 }
@@ -118,15 +118,15 @@ fn run_stride(runs: u64) -> u64 {
     stride
 }
 
-/// Maps a request's ordinal within its phase onto `(run, actor)`. The actor is `None` when the
+/// Maps a request's ordinal within its phase onto `(run, user)`. The user is `None` when the
 /// selection is run-only.
-pub fn query(ordinal: u64, runs: u64, with_actor: bool) -> (u64, Option<u64>) {
+pub fn query(ordinal: u64, runs: u64, with_user: bool) -> (u64, Option<u64>) {
     let stride = run_stride(runs);
     // Modulo before multiplication also bounds arithmetic for arbitrary ordinals.
     let run = ((ordinal % runs) * stride + SCHEDULE_SEED % runs) % runs;
     (
         run,
-        with_actor.then_some((ordinal % runs + ordinal / runs) % ACTORS),
+        with_user.then_some((ordinal % runs + ordinal / runs) % USERS),
     )
 }
 
@@ -143,49 +143,49 @@ pub fn metadata(runs: u64) -> Value {
             "phase ordinal resets"
         ),
         "query_selection": concat!(
-            "coprime run permutation; actor = (phase ordinal modulo runs + phase ordinal / runs) ",
+            "coprime run permutation; user = (phase ordinal modulo runs + phase ordinal / runs) ",
             "modulo 10; identical in every process block"
         )
     })
 }
 
-/// Request coverage of one phase: counts per run and per actor, and whether the reference
-/// coverage was reached (every run seen, and every actor seen at least 100 times).
+/// Request coverage of one phase: counts per run and per user, and whether the reference
+/// coverage was reached (every run seen, and every user seen at least 100 times).
 pub fn coverage(raw: &[Value], warmup: bool) -> Value {
     let mut runs = BTreeMap::<u64, u64>::new();
-    let mut actors = BTreeMap::<u64, u64>::new();
+    let mut users = BTreeMap::<u64, u64>::new();
     let mut pairs = BTreeSet::new();
     let mut count = 0;
     for sample in raw.iter().filter(|sample| sample["warmup"] == warmup) {
         let Some(run) = sample["run"].as_u64() else {
             continue;
         };
-        let actor = sample["actor"].as_u64();
+        let user = sample["user"].as_u64();
         count += 1;
         *runs.entry(run).or_default() += 1;
-        if let Some(actor) = actor {
-            *actors.entry(actor).or_default() += 1;
+        if let Some(user) = user {
+            *users.entry(user).or_default() += 1;
         }
 
-        pairs.insert((run, actor));
+        pairs.insert((run, user));
     }
 
     let all_runs = runs.len() == REFERENCE_RUN_COUNT;
-    let actors_balanced =
-        actors.len() as u64 == ACTORS && actors.values().all(|count| *count >= REQUESTS_PER_ACTOR);
+    let users_balanced =
+        users.len() as u64 == USERS && users.values().all(|count| *count >= REQUESTS_PER_USER);
     json!({
         "requests": count,
         "distinct_runs": runs.len(),
-        "distinct_actors": actors.len(),
-        "distinct_run_actor_pairs": pairs.len(),
+        "distinct_users": users.len(),
+        "distinct_run_user_pairs": pairs.len(),
         "run_requests": runs,
-        "actor_requests": actors,
-        "reference_coverage_achieved": all_runs && (actors.is_empty() || actors_balanced),
+        "user_requests": users,
+        "reference_coverage_achieved": all_runs && (users.is_empty() || users_balanced),
         "reference_run_coverage_achieved": all_runs,
-        "reference_actor_coverage_achieved": if actors.is_empty() {
+        "reference_user_coverage_achieved": if users.is_empty() {
             None
         } else {
-            Some(actors_balanced)
+            Some(users_balanced)
         }
     })
 }
@@ -408,7 +408,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reference_measurement_covers_every_run_and_actor_balanced() {
+    fn reference_measurement_covers_every_run_and_user_balanced() {
         let pairs: Vec<_> = (0..1000).map(|n| query(n, 1000, true)).collect();
         assert_eq!(
             pairs
@@ -419,11 +419,11 @@ mod tests {
             1000
         );
 
-        for actor in 0..10 {
+        for user in 0..10 {
             assert_eq!(
                 pairs
                     .iter()
-                    .filter(|(_, value)| *value == Some(actor))
+                    .filter(|(_, value)| *value == Some(user))
                     .count(),
                 100
             );
@@ -486,14 +486,14 @@ mod tests {
     #[test]
     fn coverage_and_cpu_populations_include_failed_requests() {
         let raw = vec![
-            json!({"warmup":true,"run":99,"actor":9,"oracle_passed":false}),
-            json!({"warmup":false,"run":1,"actor":1,"oracle_passed":false}),
-            json!({"warmup":false,"run":2,"actor":2,"oracle_passed":true}),
+            json!({"warmup":true,"run":99,"user":9,"oracle_passed":false}),
+            json!({"warmup":false,"run":1,"user":1,"oracle_passed":false}),
+            json!({"warmup":false,"run":2,"user":2,"oracle_passed":true}),
         ];
         let covered = coverage(&raw, false);
         assert_eq!(covered["requests"], 2);
         assert_eq!(covered["distinct_runs"], 2);
-        assert_eq!(covered["actor_requests"]["1"], 1);
+        assert_eq!(covered["user_requests"]["1"], 1);
 
         let batch = batches(0, 2)[0];
         let before = CpuObservation::from_probe(Ok(json!({"cpu.stat":"usage_usec 100\n"})), 1.0);

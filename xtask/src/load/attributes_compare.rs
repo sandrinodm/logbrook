@@ -239,14 +239,14 @@ async fn send_query(
 ) -> Value {
     let (selection, operation) = schedule::cell(batch.cell);
     let ordinal = batch.start + offset;
-    let (run, actor) = schedule::query(ordinal, args.runs, selection == "run_actor");
-    let path = attributes::request_path(seed, operation, run, actor);
+    let (run, user) = schedule::query(ordinal, args.runs, selection == "run_user");
+    let path = attributes::request_path(seed, operation, run, user);
 
     let started = Instant::now();
     let (status, payload) = http.request(&path, None, false).await;
     let elapsed_ms = attributes::elapsed_ms(started);
     let checked = if status == HTTP_OK {
-        attributes::verify_response(seed, operation, run, actor, &payload)
+        attributes::verify_response(seed, operation, run, user, &payload)
     } else {
         Err(attributes::http_error(status, &payload).into())
     };
@@ -256,7 +256,7 @@ async fn send_query(
         "batch_id": batch.id,
         "schedule_position": batch.position + offset,
         "run": run,
-        "actor": actor,
+        "user": user,
         "status": status,
         "elapsed_ms": elapsed_ms,
         "oracle_passed": checked.is_ok(),
@@ -471,7 +471,7 @@ fn finish_block(work: Result<Value>, cleanup: Result<()>) -> Result<Value> {
 /// Pools the samples of each cell over both variants' process blocks.
 fn summarize(blocks: &[Value]) -> Value {
     let mut summary = Vec::new();
-    for selection in ["run", "run_actor"] {
+    for selection in ["run", "run_user"] {
         for operation in OPERATIONS {
             let mut variants = BTreeMap::new();
             for variant in VARIANTS {

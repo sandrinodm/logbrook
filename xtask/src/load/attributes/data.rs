@@ -2,9 +2,9 @@
 use super::{
     Args,
     constants::{
-        ACTORS_PER_RUN, ERROR_LEVEL, FACET_DIMENSIONS, FIXTURE_SEED, HISTOGRAM_INTERVAL_MS,
-        HOST_COUNT, INFO_LEVEL, INGEST_ORDER_OFFSET, INGEST_ORDER_STRIDE, ORACLE_RETAINED,
-        ORACLE_TRIM_THRESHOLD, SEARCH_PAGE_LIMIT, VIDEOS_PER_ACTOR,
+        ERROR_LEVEL, FACET_DIMENSIONS, FIXTURE_SEED, HISTOGRAM_INTERVAL_MS, HOST_COUNT, INFO_LEVEL,
+        INGEST_ORDER_OFFSET, INGEST_ORDER_STRIDE, ORACLE_RETAINED, ORACLE_TRIM_THRESHOLD,
+        SEARCH_PAGE_LIMIT, SESSIONS_PER_USER, USERS_PER_RUN,
     },
 };
 use crate::{Result, load::semantics::DAY_MS};
@@ -23,16 +23,16 @@ pub(super) struct Position {
     pub(super) id: u64,
 }
 
-/// The selection an oracle entry answers for: one run, optionally narrowed to one actor.
+/// The selection an oracle entry answers for: one run, optionally narrowed to one user.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Scope {
     run: u64,
-    actor: Option<u64>,
+    user: Option<u64>,
 }
 
 impl Scope {
-    pub(super) fn new(run: u64, actor: Option<u64>) -> Self {
-        Self { run, actor }
+    pub(super) fn new(run: u64, user: Option<u64>) -> Self {
+        Self { run, user }
     }
 }
 
@@ -62,39 +62,39 @@ pub struct Seed {
     pub report: Value,
 }
 
-/// Returns the attribute filter that selects one run, narrowed to one actor when given.
-pub fn selection(run: u64, actor: Option<u64>) -> String {
+/// Returns the attribute filter that selects one run, narrowed to one user when given.
+pub fn selection(run: u64, user: Option<u64>) -> String {
     let mut conditions = vec![json!({"key":"runId","op":"eq","value":format!("run-{run:04}")})];
-    if let Some(actor) = actor {
-        conditions.push(json!({"key":"actorJobId","op":"eq","value":format!("actor-{actor:02}")}));
+    if let Some(user) = user {
+        conditions.push(json!({"key":"userId","op":"eq","value":format!("user-{user:02}")}));
     }
     json!({"attributes":conditions}).to_string()
 }
 
 /// Query-string parameters for a search over the fixture window and one selection.
-pub fn query_params(seed: &Seed, run: u64, actor: Option<u64>) -> BTreeMap<String, String> {
+pub fn query_params(seed: &Seed, run: u64, user: Option<u64>) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("from".into(), seed.from.to_string()),
         ("to".into(), seed.to.to_string()),
         ("source".into(), "attributes".into()),
-        ("filter".into(), selection(run, actor)),
+        ("filter".into(), selection(run, user)),
     ])
 }
 
-/// Where one generated event sits in the run, actor and video grid.
+/// Where one generated event sits in the run, user and session grid.
 struct Coordinate {
     run: u64,
-    actor: u64,
-    video: u64,
+    user: u64,
+    session: u64,
 }
 
-/// Maps the event ordinal `n` onto the run, actor and video grid.
+/// Maps the event ordinal `n` onto the run, user and session grid.
 fn coordinate(args: &Args, n: u64) -> Coordinate {
     let ordinal = n / args.runs;
     Coordinate {
         run: n % args.runs,
-        actor: ordinal % ACTORS_PER_RUN,
-        video: (ordinal / ACTORS_PER_RUN) % VIDEOS_PER_ACTOR,
+        user: ordinal % USERS_PER_RUN,
+        session: (ordinal / USERS_PER_RUN) % SESSIONS_PER_USER,
     }
 }
 
@@ -110,11 +110,11 @@ fn literal_object(value: Value) -> Map<String, Value> {
 ///
 /// Pino input fields are top-level so ingestion retains the identifiers directly.
 pub fn make_event(args: &Args, n: u64, from: i64) -> Value {
-    let Coordinate { run, actor, video } = coordinate(args, n);
+    let Coordinate { run, user, session } = coordinate(args, n);
     let mut attributes = json!({
         "runId": format!("run-{run:04}"),
-        "actorJobId": format!("actor-{actor:02}"),
-        "videoId": format!("video-{video:02}"),
+        "userId": format!("user-{user:02}"),
+        "sessionId": format!("session-{session:02}"),
         "sequence": n,
         "active": true,
         "tag0": "v0",
@@ -140,8 +140,12 @@ pub fn make_event(args: &Args, n: u64, from: i64) -> Value {
     let rank = (n * INGEST_ORDER_STRIDE + INGEST_ORDER_OFFSET) % args.rows;
     let offset = i128::from(DAY_MS) * i128::from(rank / 2) / i128::from(args.rows.div_ceil(2));
     let time = from + i64::try_from(offset).expect("event time stays inside the one-day window");
-    let level = if video == 0 { ERROR_LEVEL } else { INFO_LEVEL };
-    let service = if actor.is_multiple_of(2) {
+    let level = if session == 0 {
+        ERROR_LEVEL
+    } else {
+        INFO_LEVEL
+    };
+    let service = if user.is_multiple_of(2) {
         "api"
     } else {
         "worker"
@@ -277,10 +281,10 @@ fn write_events(
     let mut stats = WriteStats::new();
     for n in 0..args.rows {
         let event = make_event(args, n, from);
-        let Coordinate { run, actor, .. } = coordinate(args, n);
+        let Coordinate { run, user, .. } = coordinate(args, n);
         for scope in [
             Scope::new(run, None),
-            Scope::new(run, Some(actor)),
+            Scope::new(run, Some(user)),
             Scope::new(u64::MAX, None),
         ] {
             record(seed.expected.entry(scope).or_default(), &event, n + 1, from);
@@ -307,8 +311,8 @@ fn seed_report(args: &Args, seed: &Seed, stats: &WriteStats, generation: Duratio
         "seed": FIXTURE_SEED,
         "rows": args.rows,
         "runs": args.runs,
-        "actors_per_run": ACTORS_PER_RUN,
-        "videos_per_actor": VIDEOS_PER_ACTOR,
+        "users_per_run": USERS_PER_RUN,
+        "sessions_per_user": SESSIONS_PER_USER,
         "window_ms": DAY_MS,
         "from": seed.from,
         "to": seed.to,
@@ -365,7 +369,7 @@ impl Operation {
     }
 }
 
-/// Checks one response against the independent oracle for `operation` over `(run, actor)`.
+/// Checks one response against the independent oracle for `operation` over `(run, user)`.
 ///
 /// # Errors
 ///
@@ -375,11 +379,11 @@ pub fn verify_response(
     seed: &Seed,
     operation: &str,
     run: u64,
-    actor: Option<u64>,
+    user: Option<u64>,
     payload: &Value,
 ) -> Result<()> {
     let empty = Expected::default();
-    let expected = seed.expected.get(&Scope::new(run, actor)).unwrap_or(&empty);
+    let expected = seed.expected.get(&Scope::new(run, user)).unwrap_or(&empty);
     match Operation::parse(operation).ok_or("unknown attribute benchmark operation")? {
         Operation::Search => verify_search(expected, payload),
         Operation::Count => verify_count(expected, payload),

@@ -1038,6 +1038,43 @@ async fn successful_and_error_responses_match_checked_openapi_schemas() {
     storage.shutdown().await.unwrap();
 }
 
+#[test]
+fn openapi_examples_match_their_schemas() {
+    let spec: Value = serde_json::from_str(include_str!("../src/openapi.json")).unwrap();
+    let mut checked = 0;
+    let mut check = |media: &Value| {
+        if let Some(example) = media.get("example") {
+            assert_contract(example, &media["schema"], &spec);
+            checked += 1;
+        }
+    };
+
+    for item in spec["paths"].as_object().unwrap().values() {
+        for operation in item.as_object().unwrap().values() {
+            for parameter in operation["parameters"].as_array().into_iter().flatten() {
+                check(parameter);
+                for media in parameter["content"].as_object().into_iter().flatten() {
+                    check(media.1);
+                }
+            }
+            for media in operation["requestBody"]["content"]
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                check(media.1);
+            }
+            for response in operation["responses"].as_object().unwrap().values() {
+                for media in response["content"].as_object().into_iter().flatten() {
+                    check(media.1);
+                }
+            }
+        }
+    }
+
+    assert!(checked > 0, "the spec has no examples to check");
+}
+
 #[tokio::test]
 async fn ingest_alias_documents_and_returns_the_named_route_size_limit_response() {
     let (_directory, storage, app) = setup_with(|config| config.storage.max_size_bytes = Some(1));

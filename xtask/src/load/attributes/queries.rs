@@ -26,15 +26,15 @@ use std::{
     time::Instant,
 };
 
-/// Builds the request path for `operation` over one run or run-and-actor selection.
+/// Builds the request path for `operation` over one run or run-and-user selection.
 pub(in crate::load) fn request_path(
     seed: &Seed,
     operation: &str,
     run: u64,
-    actor: Option<u64>,
+    user: Option<u64>,
 ) -> String {
     let operation = Operation::parse(operation).expect("known attribute operation");
-    operation_path(operation, query_params(seed, run, actor))
+    operation_path(operation, query_params(seed, run, user))
 }
 
 /// Adds the operation's own query parameter to `params` and returns its request path.
@@ -137,14 +137,14 @@ async fn send_query(
 ) -> (Value, Option<Value>) {
     let (selection, operation) = schedule::cell(batch.cell);
     let ordinal = batch.start + offset;
-    let (run, actor) = schedule::query(ordinal, args.runs, selection == "run_actor");
-    let path = request_path(seed, operation, run, actor);
+    let (run, user) = schedule::query(ordinal, args.runs, selection == "run_user");
+    let path = request_path(seed, operation, run, user);
     let started = Instant::now();
     let (status, payload) = http.request(&path, None, false).await;
     let elapsed = elapsed_ms(started);
     // Validation, diagnostics and deadline recovery are outside HTTP timing.
     let mut checked = if status == HTTP_OK {
-        verify_response(seed, operation, run, actor, &payload)
+        verify_response(seed, operation, run, user, &payload)
     } else {
         Err(http_error(status, &payload).into())
     };
@@ -171,7 +171,7 @@ async fn send_query(
         "batch_id": batch.id,
         "schedule_position": batch.position + offset,
         "run": run,
-        "actor": actor,
+        "user": user,
         "status": status,
         "elapsed_ms": elapsed,
         "oracle_passed": checked.is_ok(),

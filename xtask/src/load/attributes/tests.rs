@@ -39,14 +39,14 @@ fn empty_projection_configuration_is_byte_identical_to_legacy_config() {
 #[test]
 fn promoted_fixture_configuration_preserves_reference_budgets_and_requires_coverage() {
     let mut args = args();
-    args.promoted_string_keys = vec!["runId".into(), "actorJobId".into()];
+    args.promoted_string_keys = vec!["runId".into(), "userId".into()];
     args.validate().unwrap();
 
     let config = args.server_config();
     assert!(config.starts_with(SERVER_CONFIG));
-    assert!(config.contains("promoted_string_keys=[\"runId\",\"actorJobId\"]"));
+    assert!(config.contains("promoted_string_keys=[\"runId\",\"userId\"]"));
 
-    let status = json!({"schema_version":4, "promoted_string_keys":["actorJobId", "runId"],
+    let status = json!({"schema_version":4, "promoted_string_keys":["runId", "userId"],
         "hot_rows":10, "hot_covered_rows":10, "archived_rows":90, "archived_covered_rows":90,
         "legacy_archive_files":0});
     verify_projection_status(&args, &status, 100).unwrap();
@@ -71,7 +71,7 @@ fn promoted_fixture_configuration_preserves_reference_budgets_and_requires_cover
 }
 
 #[test]
-fn absent_actor_facets_require_all_empty_dimensions() {
+fn absent_user_facets_require_all_empty_dimensions() {
     let mut args = args();
     args.rows = 10;
     args.runs = 10;
@@ -88,27 +88,27 @@ fn absent_actor_facets_require_all_empty_dimensions() {
 }
 
 #[test]
-fn reference_fixture_has_ten_percent_errors_for_every_actor() {
+fn reference_fixture_has_ten_percent_errors_for_every_user() {
     let args = args();
-    let mut actors: BTreeMap<String, (u64, u64, std::collections::BTreeSet<String>)> =
+    let mut users: BTreeMap<String, (u64, u64, std::collections::BTreeSet<String>)> =
         BTreeMap::new();
     for ordinal in 0..1000 {
         let event = make_event(&args, ordinal * 1000 + 17, 0);
         assert_eq!(event["runId"], "run-0017");
-        let entry = actors
-            .entry(event["actorJobId"].as_str().unwrap().into())
+        let entry = users
+            .entry(event["userId"].as_str().unwrap().into())
             .or_default();
         entry.0 += 1;
         if event["level"] == 50 {
             entry.1 += 1;
         }
-        entry.2.insert(event["videoId"].as_str().unwrap().into());
+        entry.2.insert(event["sessionId"].as_str().unwrap().into());
     }
 
-    assert_eq!(actors.len(), 10);
+    assert_eq!(users.len(), 10);
 
-    for (total, errors, videos) in actors.values() {
-        assert_eq!((*total, *errors, videos.len()), (100, 10, 10));
+    for (total, errors, sessions) in users.values() {
+        assert_eq!((*total, *errors, sessions.len()), (100, 10, 10));
     }
 }
 

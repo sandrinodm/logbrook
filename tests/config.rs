@@ -491,7 +491,7 @@ fn days_and_size_environment_aliases_validate_and_conflicts_fail() {
 fn promoted_keys_are_bounded_and_per_index_empty_override_is_explicit() {
     use logbrook::config::IndexSettings;
     let mut config = valid();
-    config.storage.promoted_string_keys = vec!["runId".into(), "actorJobId".into()];
+    config.storage.promoted_string_keys = vec!["runId".into(), "userId".into()];
     config.indexes.insert(
         "payments".into(),
         IndexSettings {
@@ -507,7 +507,7 @@ fn promoted_keys_are_bounded_and_per_index_empty_override_is_explicit() {
             .unwrap()
             .storage
             .promoted_string_keys,
-        vec!["runId", "actorJobId"]
+        vec!["runId", "userId"]
     );
     assert!(
         config

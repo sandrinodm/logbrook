@@ -433,7 +433,7 @@ async fn literal_keys_types_unicode_and_root_object_guard() {
     let dir = tempfile::tempdir().unwrap();
     let db = Storage::open(config(dir.path())).unwrap();
     let keys = [
-        "actor.job",
+        "user.id",
         "a/b",
         "a~b",
         "*",
@@ -459,8 +459,8 @@ async fn literal_keys_types_unicode_and_root_object_guard() {
             event(
                 4,
                 json!({
-                    "actor": {
-                        "job": "value",
+                    "user": {
+                        "id": "value",
                     },
                 }),
             ),
@@ -621,10 +621,10 @@ async fn scalar_and_batched_strings_preserve_typed_conjunctions_on_every_storage
             &[json!(["true", text]), json!(text), Value::Null],
         ),
         selection_case(
-            &[(literal, json!(text)), ("actor.job", json!(""))],
+            &[(literal, json!(text)), ("user.id", json!(""))],
             json!({
                 literal: text,
-                "actor.job": "",
+                "user.id": "",
             }),
             &[
                 (literal, json!("É\n\0' OR true --")),
@@ -634,15 +634,15 @@ async fn scalar_and_batched_strings_preserve_typed_conjunctions_on_every_storage
                         "value": text,
                     }),
                 ),
-                ("actor.job", json!(false)),
-                ("actor.job", json!([])),
+                ("user.id", json!(false)),
+                ("user.id", json!([])),
             ],
             &[json!({
                 "a": {
                     "~\0雪": text,
                 },
-                "actor": {
-                    "job": "",
+                "user": {
+                    "id": "",
                 },
             })],
         ),
@@ -674,13 +674,13 @@ async fn scalar_and_batched_strings_preserve_typed_conjunctions_on_every_storage
         selection_case(
             &[
                 ("run", json!("r")),
-                ("actor", json!("a")),
+                ("user", json!("a")),
                 ("u", json!(u64::MAX)),
                 ("i", json!(i64::MIN)),
             ],
             json!({
                 "run": "r",
-                "actor": "a",
+                "user": "a",
                 "u": u64::MAX,
                 "i": i64::MIN,
             }),
