@@ -1,0 +1,24 @@
+# The build context is an allowlist: everything is excluded, and only the inputs of `pnpm build`
+# are added back. Nothing else (credentials, local builds, tests, editor files) can reach an image
+# layer, and a new build input has to be added here on purpose before the build can see it.
+*
+
+# Package manifest, lockfile and pnpm settings (overrides, allowed build scripts).
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+
+# Build and TypeScript configuration.
+!vite.config.ts
+!tsconfig.json
+
+# Application sources.
+!src/
+
+# Never send these, even from inside an allowed directory.
+**/.DS_Store
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+**/*.test.ts
+**/*.test.tsx

@@ -1,0 +1,56 @@
+# Node patterns based on https://github.com/github/gitignore/blob/main/Node.gitignore
+
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Build output of Vite, TanStack Start and Nitro
+dist/
+dist-ssr/
+.output/
+.nitro/
+.tanstack/
+.vite/
+*.tsbuildinfo
+
+# Tool caches
+.cache/
+.eslintcache
+.stylelintcache
+.npm/
+.pnpm-store/
+
+# Test, coverage and profiling output
+coverage/
+.nyc_output/
+.e2e/
+bundle-stats.json
+*.cpuprofile
+*.heapsnapshot
+
+# Logs and crash reports
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Local environment: credentials never belong in git
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating systems
+.DS_Store
+Thumbs.db

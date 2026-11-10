@@ -158,3 +158,120 @@ jobs:
           name: logbrook-${{ matrix.architecture }}-oci
           path: /tmp/logbrook-${{ matrix.architecture }}.tar
           retention-days: 7
+  ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26.13.0'
+      - name: Install pnpm
+        run: npm install --global pnpm@12.1.0
+      - name: Install UI dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Check formatting, lint, types and JSDoc
+        working-directory: ui
+        run: pnpm check
+      - name: Unit tests
+        working-directory: ui
+        run: pnpm test
+      - name: Lint React
+        working-directory: ui
+        run: pnpm lint:react
+      - name: Build
+        working-directory: ui
+        run: pnpm build
+      - name: Build the UI container image
+        working-directory: ui
+        run: docker build --tag logbrook-ui:ci .
+      - name: The UI container refuses to start without a read token
+        run: |
+          if output=$(docker run --rm logbrook-ui:ci 2>&1); then
+            echo "$output"
+            echo "The container started without LOGBROOK_READ_TOKEN"
+            exit 1
+          fi
+          echo "$output"
+          echo "$output" | grep --fixed-strings 'LOGBROOK_READ_TOKEN is required'
+      - name: The UI container answers its health check
+        run: |
+          docker run --detach --name logbrook-ui-ci --publish 127.0.0.1:3000:3000 \
+            --env LOGBROOK_READ_TOKEN=ci-read-token-0123456789 logbrook-ui:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/healthz; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs logbrook-ui-ci
+          exit 1
+      - name: The UI container warns about, and enforces, ALLOWED_HOSTS
+        run: |
+          docker rm --force logbrook-ui-ci
+          docker run --detach --name logbrook-ui-ci --publish 127.0.0.1:3000:3000 \
+            --env LOGBROOK_READ_TOKEN=ci-read-token-0123456789 logbrook-ui:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/healthz; then break; fi
+            sleep 1
+          done
+          docker logs logbrook-ui-ci 2>&1 | grep --fixed-strings 'ALLOWED_HOSTS is not set'
+          docker rm --force logbrook-ui-ci
+          docker run --detach --name logbrook-ui-ci --publish 127.0.0.1:3000:3000 \
+            --env LOGBROOK_READ_TOKEN=ci-read-token-0123456789 \
+            --env ALLOWED_HOSTS=ui.example.test logbrook-ui:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/healthz; then break; fi
+            sleep 1
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'Host: ui.example.test' http://127.0.0.1:3000/healthz)" = 200
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header 'Host: evil.example' http://127.0.0.1:3000/healthz)" = 421
+      - name: Stop the UI container
+        if: always()
+        run: docker rm --force logbrook-ui-ci
+      - name: Install Chromium for the browser tests
+        working-directory: ui
+        run: pnpm exec e2e-web install chromium --with-deps
+      - name: Build the Logbrook binary the e2e tests start
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo build --locked --bin logbrook
+      - name: Integration and browser tests against a real Logbrook
+        working-directory: ui
+        env:
+          E2E_TELEMETRY_DISABLED: '1'
+        run: pnpm test:e2e
+      - name: Every e2e test ran and passed
+        working-directory: ui
+        # The runner also exits 0 when a test is skipped or flaky.
+        run: |
+          node -e "const s=require('./.e2e/report.json').run.summary;if(!s.selected||s.selected!==s.discovered||s.passed!==s.selected||s.failed||s.skipped||s.flaky||s.interrupted){console.error(s);process.exit(1)}"
+      - name: Upload the e2e report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-e2e-report
+          path: ui/.e2e/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: The e2e tests left no process behind
+        if: always()
+        run: |
+          left=0
+          if pgrep --list-full --full 'dev-logbrook|target/debug/logbrook|\.output/server|chrome-headless-shell|e2e/dist/run/worker'; then
+            echo "A test process was left running"
+            left=1
+          fi
+          if ls -d "$(node -p 'require("os").tmpdir()')"/logbrook-ui-it-* 2>/dev/null; then
+            echo "A test directory was left behind"
+            left=1
+          fi
+          exit "$left"

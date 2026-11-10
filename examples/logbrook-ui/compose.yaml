@@ -1,0 +1,44 @@
+# Logbrook with its web UI, on top of the repository's compose.yaml.
+#
+#   LOGBROOK_INGEST_TOKEN=... LOGBROOK_READ_TOKEN=... \
+#   docker compose -f examples/logbrook-ui/compose.yaml up --build
+#
+# The UI is then on http://127.0.0.1:3000. Set LOGBROOK_ADMIN_TOKEN as well to let the UI create
+# and delete indexes; without it the index view is read-only.
+#
+# The UI has NO authentication of its own. Everyone who can reach its port gets the access of the
+# tokens below, including creating and deleting indexes when an admin token is set. It therefore
+# publishes its port on loopback only. To expose it, put an authenticating reverse proxy in front
+# of it, and do not publish the port on other interfaces.
+include:
+  - path: ../../compose.yaml
+
+services:
+  logbrook-ui:
+    build: ../../ui
+    ports:
+      # Loopback only: the UI has no authentication and must sit behind an authenticating reverse
+      # proxy before it is reachable from anywhere else.
+      - "127.0.0.1:3000:3000"
+    environment:
+      # The server's address on the compose network. The UI proxies browser requests to it.
+      LOGBROOK_URL: http://logbrook:3100
+      # The read token the UI uses for every read. The same variable the server is configured with.
+      LOGBROOK_READ_TOKEN: ${LOGBROOK_READ_TOKEN:?Set the read token, the same one the server uses}
+      # Optional management credential; omitted from the container when unset.
+      LOGBROOK_ADMIN_TOKEN:
+      # Host names the UI answers to (DNS rebinding protection; the port is ignored). The container
+      # listens on all of its interfaces, so without this the UI accepts any Host header and logs a
+      # warning. localhost, 127.0.0.1 and [::1] are always accepted. Behind a reverse proxy, set
+      # this to the public host name, for example UI_ALLOWED_HOSTS=logs.example.com.
+      ALLOWED_HOSTS: ${UI_ALLOWED_HOSTS:-localhost}
+    depends_on:
+      - logbrook
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

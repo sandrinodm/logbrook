@@ -1,0 +1,14 @@
+{
+  "roots": ["."],
+  "excludePaths": [
+    "node_modules",
+    "dist",
+    ".e2e",
+    ".output",
+    ".tanstack",
+    ".nitro",
+    "src/components/ui"
+  ],
+  "excludeFiles": ["\\.d\\.[cm]?ts$", "\\.test\\.[^.]+$", "\\.e2e\\.[^.]+$", "\\.gen\\.[^.]+$"],
+  "includeExtensions": [".ts", ".tsx"]
+}
