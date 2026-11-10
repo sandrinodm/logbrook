@@ -8,10 +8,10 @@ and the fuzzing dependencies never reach the server executable.
 | Target | Input and what it checks |
 | --- | --- |
 | `framing` | Arbitrary wire bytes; framing the whole buffer and framing it in fragments agree, and the capacity used stays within the preflight estimate |
-| `envelope` | Whole envelopes, including gzip; each accepted record decodes from its preserved bytes and normalizes the same way every time |
+| `envelope` | Whole envelopes, including gzip; each accepted record decodes from its preserved bytes and normalizes the same way every time, and the `top_level` result matches the `nested` one |
 | `packed_payload` | Raw packed entries or gzip members inside valid bin32 or str32 envelopes; payload framing, corruption and expansion limits |
 | `options_timestamps` | Arbitrary MessagePack bytes in the options and timestamp positions of an otherwise valid envelope |
-| `docker_normalize` | Whole envelopes normalized with the text, Pino and `json_auto` profiles; output is deterministic, bytes are preserved and messages stay within their limit |
+| `docker_normalize` | Whole envelopes normalized with the text, Pino and `json_auto` profiles; output is deterministic, bytes are preserved and messages stay within their limit. Every run also normalizes with `application_attributes = "top_level"` and compares that result with the `nested` one |
 
 Install the pinned tools and run from the repository root:
 
@@ -44,6 +44,11 @@ The seeds come from the Ruby msgpack fixtures described in
 checks the known wrapper bytes before it slices out raw entries, gzip payloads,
 EventTime values and option seeds. `forward.dict` holds MessagePack markers,
 protocol control keys, gzip headers, Docker fields and structured-log content.
+
+`seed_corpus.py` also writes two hand-built envelopes for the `top_level`
+lifting path, each with a reserved key. `lift_docker_json.msgpack` lifts on
+Docker routes with a JSON profile, and `lift_generic_reserved.msgpack` lifts on
+generic routes.
 
 Git ignores new corpus files until someone reviews and minimizes them. The
 checked-in `.msgpack` and `.bin` seeds stay versioned. Never add production logs,

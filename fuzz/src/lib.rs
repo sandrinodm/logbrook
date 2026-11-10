@@ -7,9 +7,13 @@ pub mod model;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use forward::{
     decode::{decode_frame, decode_value},
-    normalize::{JsonProfile, NormalizationOptions, NormalizationProfile, normalize_envelope},
-    protocol::{CodecLimits, DecodedFrame, ForwardEnvelope},
+    normalize::{
+        ApplicationAttributes, JsonProfile, NormalizationOptions, NormalizationProfile,
+        normalize_envelope,
+    },
+    protocol::{CodecLimits, DecodedFrame, ForwardEnvelope, ProtocolError},
 };
+use serde_json::Value as Json;
 use std::time::Duration;
 
 /// Largest mutated byte slice admitted by any fuzz target.
@@ -66,7 +70,22 @@ pub fn check_normalization(
         max_json_depth: 16,
         ..NormalizationOptions::default()
     };
+    let top_level = NormalizationOptions {
+        application_attributes: ApplicationAttributes::TopLevel,
+        ..options.clone()
+    };
+    let first_top_level = normalize_envelope(envelope, &top_level);
+    match (&first_top_level, normalize_envelope(envelope, &top_level)) {
+        (Ok(first), Ok(second)) => assert_eq!(
+            serde_json::to_vec(first).unwrap(),
+            serde_json::to_vec(&second).unwrap()
+        ),
+        (Err(first), Err(second)) => assert_eq!(first, &second),
+        _ => panic!("top_level normalization is not deterministic"),
+    }
+
     let first = normalize_envelope(envelope, &options);
+    check_top_level(&first, &first_top_level, profile);
     let second = normalize_envelope(envelope, &options);
     match (first, second) {
         (Ok(first), Ok(second)) => {
@@ -90,5 +109,92 @@ pub fn check_normalization(
         }
         (Err(first), Err(second)) => assert_eq!(first, second),
         _ => panic!("normalization is not deterministic"),
+    }
+}
+
+/// Top-level attribute keys that Logbrook writes itself.
+const RESERVED: [&str; 3] = ["forward", "docker", "logbrook"];
+
+/// Checks that the `top_level` result agrees with the `nested` one for an accepted envelope.
+///
+/// A lifted event can serialize slightly larger, so `top_level` may fail on the normalized-size
+/// limit whatever `nested` returned. Every other difference is a failure.
+fn check_top_level(
+    nested: &Result<Vec<crate::model::NormalizedEvent>, ProtocolError>,
+    top_level: &Result<Vec<crate::model::NormalizedEvent>, ProtocolError>,
+    profile: NormalizationProfile,
+) {
+    if matches!(top_level, Err(ProtocolError::Limit("normalized envelope"))) {
+        return;
+    }
+    let (nested, top_level) = match (nested, top_level) {
+        (Ok(nested), Ok(top_level)) => (nested, top_level),
+        (Err(nested), Err(top_level)) => {
+            assert_eq!(nested, top_level);
+            return;
+        }
+        (Ok(_), Err(error)) => panic!("top_level failed where nested succeeded: {error:?}"),
+        (Err(_), Ok(_)) => panic!("top_level succeeded where nested failed"),
+    };
+    assert_eq!(nested.len(), top_level.len());
+
+    for (nested, lifted) in nested.iter().zip(top_level) {
+        assert_eq!(nested.message, lifted.message);
+        assert_eq!(nested.level, lifted.level);
+        assert_eq!(nested.event_time, lifted.event_time);
+        assert_eq!(nested.service, lifted.service);
+        assert_eq!(nested.host, lifted.host);
+        assert_eq!(nested.logger, lifted.logger);
+        assert_eq!(nested.pid, lifted.pid);
+
+        if lifted.attributes["forward"]
+            .get("application_attributes")
+            .is_none()
+        {
+            assert_eq!(nested.attributes, lifted.attributes);
+            continue;
+        }
+        assert_eq!(
+            lifted.attributes["forward"]["application_attributes"],
+            "top_level"
+        );
+
+        let Json::Object(application) = &nested.attributes["application"] else {
+            panic!("a lifted event had no application object");
+        };
+        if profile == NormalizationProfile::Docker {
+            let status = &nested.attributes["logbrook"]["parse_status"];
+            assert!(
+                status == "structured" || status == "json_without_message",
+                "a Docker event was lifted with parse_status {status}"
+            );
+        }
+        let conflicts = lifted.attributes["logbrook"].get("conflicting_fields");
+        for (key, value) in application {
+            if RESERVED.contains(&key.as_str()) {
+                assert_eq!(conflicts.and_then(|fields| fields.get(key)), Some(value));
+            } else {
+                assert_eq!(lifted.attributes.get(key), Some(value));
+            }
+        }
+
+        // The container is gone unless the application itself had an `application` field.
+        match application.get("application") {
+            Some(inner) => assert_eq!(lifted.attributes.get("application"), Some(inner)),
+            None => assert!(lifted.attributes.get("application").is_none()),
+        }
+
+        // Logbrook's own objects survive; the lifted ones only add to them.
+        for key in RESERVED {
+            let Some(Json::Object(kept)) = nested.attributes.get(key) else {
+                continue;
+            };
+            let Json::Object(now) = &lifted.attributes[key] else {
+                panic!("{key} is no longer an object");
+            };
+            for (name, value) in kept {
+                assert_eq!(now.get(name), Some(value));
+            }
+        }
     }
 }

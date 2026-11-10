@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed fuzzers from checked-in independent Ruby sender captures."""
+"""Seed fuzzers from checked-in independent Ruby sender captures and hand-built lift envelopes."""
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
@@ -32,3 +32,40 @@ assert message[13:15] == bytes([0xD7, 0])
 (corpus / "options_timestamps" / "nil.bin").write_bytes(bytes([0xC0]))
 (corpus / "framing" / "nil.bin").write_bytes(bytes([0xC0]))
 (corpus / "envelope" / "reserved_marker.bin").write_bytes(bytes([0xC1]))
+
+
+def _str(text):
+    data = text.encode()
+    assert len(data) < 256
+    return (bytes([0xA0 | len(data)]) if len(data) < 32 else bytes([0xD9, len(data)])) + data
+
+
+def _map(*pairs):
+    assert len(pairs) < 16
+    return bytes([0x80 | len(pairs)]) + b"".join(_str(k) + v for k, v in pairs)
+
+
+# Message-mode envelopes whose records reach the `top_level` lifting path: a Docker
+# record whose JSON log line has a reserved key (`docker`) next to ordinary keys,
+# and a generic record with a nested `application` field.
+docker_line = '{"msg":"started","level":30,"runId":"r1","docker":"x","application":{"a":1}}'
+docker_record = _map(
+    ("container_id", _str("abc")),
+    ("container_name", _str("/worker")),
+    ("source", _str("stdout")),
+    ("log", _str(docker_line)),
+)
+generic_record = _map(
+    ("message", _str("started")),
+    ("runId", _str("r1")),
+    ("logbrook", _map(("a", _str("b")))),
+    ("application", _map(("a", bytes([1])))),
+)
+for name, tag, record in (
+    ("lift_docker_json", "docker.worker", docker_record),
+    ("lift_generic_reserved", "app.api", generic_record),
+):
+    wire = bytes([0x94]) + _str(tag) + bytes([0]) + record + _map(("chunk", _str("c1")))
+    for target in ("envelope", "docker_normalize"):
+        (corpus / target).mkdir(parents=True, exist_ok=True)
+        (corpus / target / f"{name}.msgpack").write_bytes(wire)

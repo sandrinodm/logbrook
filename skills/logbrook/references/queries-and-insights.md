@@ -121,7 +121,7 @@ curl --fail-with-body --silent --show-error --no-buffer --get \
   --data-urlencode 'service=checkout' --data-urlencode 'min_level=50'
 ```
 
-Without `Last-Event-ID`, tail starts at the latest committed event, not at the start of stored history. Save the exact SSE `id` from `log` and `cursor` frames and reconnect with it as `Last-Event-ID`. A `gap` frame means some events can't be replayed; fill the hole from retained history with a search, because retrying the same ID won't recover expired data. Tail accepts field and attribute filters, but not time bounds, page limits or search cursors. Resuming with different filters, or with a plain numeric ID, returns `400`. Records from Forward keep application fields under `attributes.application`, which top-level equality filters can't reach.
+Without `Last-Event-ID`, tail starts at the latest committed event, not at the start of stored history. Save the exact SSE `id` from `log` and `cursor` frames and reconnect with it as `Last-Event-ID`. A `gap` frame means some events can't be replayed; fill the hole from retained history with a search, because retrying the same ID won't recover expired data. Tail accepts field and attribute filters, but not time bounds, page limits or search cursors. Resuming with different filters, or with a plain numeric ID, returns `400`. By default, records from Forward keep application fields under `attributes.application`, which top-level equality filters can't reach. With `application_attributes = "top_level"` on the Forward route, they are stored at the top level and can be filtered.
 
 ## Explain the result
 
