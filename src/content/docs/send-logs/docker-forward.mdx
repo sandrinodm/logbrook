@@ -193,7 +193,7 @@ cd examples/forward
 export LOGBROOK_INGEST_TOKEN='<random ingestion token>'
 export LOGBROOK_READ_TOKEN='<different random read token>'
 
-docker compose up -d --build logbrook
+docker compose up -d logbrook
 docker compose --profile smoke run --rm producer
 ```
 

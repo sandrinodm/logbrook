@@ -9,7 +9,7 @@ This Compose deployment keeps its data in a named volume, reads its credentials 
 
 ## What you get
 
-- The published image, with data in the `logs` named volume mounted at `/data`.
+- The published image from GHCR, with data in the `logs` named volume mounted at `/data`.
 - HTTP published on the host's `127.0.0.1:3100` only.
 - A read-only root filesystem, a 256 MiB `/tmp` tmpfs, all Linux capabilities dropped, and a 35-second shutdown grace period.
 - Seven-day retention, a 20 GB size target per index, at most four indexes, and events archived to Parquet after one day.
@@ -23,12 +23,12 @@ This Compose deployment keeps its data in a named volume, reads its credentials 
     ```
   </Step>
   <Step title="Write compose.yaml">
-    This is the template from the [Logbrook agent skill](https://github.com/sandrinodm/logbrook/blob/main/skills/logbrook/assets/compose.yaml). It takes the image and credentials from `.env`.
+    It runs the published `ghcr.io/sandrinodm/logbrook:0.2.0` image and takes the credentials from `.env`. To run another release, a digest or your own build, set `LOGBROOK_IMAGE` in `.env`.
 
     ```yaml title="compose.yaml"
     services:
       logbrook:
-        image: ${LOGBROOK_IMAGE:?Set LOGBROOK_IMAGE to a published or locally built image}
+        image: ${LOGBROOK_IMAGE:-ghcr.io/sandrinodm/logbrook:0.2.0}
         ports:
           - "127.0.0.1:3100:3100"
         environment:
@@ -69,7 +69,6 @@ This Compose deployment keeps its data in a named volume, reads its credentials 
       umask 077
       set -C
       cat > .env <<ENV
-    LOGBROOK_IMAGE=ghcr.io/sandrinodm/logbrook:0.2.0
     LOGBROOK_INGEST_TOKEN=$(openssl rand -hex 32)
     LOGBROOK_READ_TOKEN=$(openssl rand -hex 32)
     ENV
@@ -135,8 +134,8 @@ For separate ingestion sources, scoped readers, or per-index policies, mount a T
 Logbrook serves plain HTTP and the template binds the host port to loopback. Put a TLS-terminating reverse proxy in front of it before exposing it to other machines. Containers on the same Compose network reach it at `http://logbrook:3100`.
 </Aside>
 
-<Aside type="tip" title="Building from a checkout">
-The repository's root [`compose.yaml`](https://github.com/sandrinodm/logbrook/blob/main/compose.yaml) builds the image from source. From a checkout, export `LOGBROOK_INGEST_TOKEN` and `LOGBROOK_READ_TOKEN`, then run `docker compose up --build -d`.
+<Aside type="tip" title="Running your own build">
+The published image covers every release. To run an unreleased commit, build the image from a checkout with `docker build -t logbrook:local .`, set `LOGBROOK_IMAGE=logbrook:local` in `.env`, and recreate the service. See [Build from source](/get-started/build-from-source/).
 </Aside>
 
 ## Next steps
