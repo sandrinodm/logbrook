@@ -337,4 +337,5 @@ printf '%s\n' 'https://example.invalid/release'
 
     let notes = fs::read_to_string(scratch.path().join("release-notes.md")).unwrap();
     assert!(notes.contains("ghcr.io/example/logbrook:0.2.0-rc.1"));
+    assert!(notes.contains("docker pull ghcr.io/example/logbrook-ui:0.2.0-rc.1"));
 }

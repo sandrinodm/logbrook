@@ -158,6 +158,69 @@ jobs:
           name: logbrook-${{ matrix.architecture }}-oci
           path: /tmp/logbrook-${{ matrix.architecture }}.tar
           retention-days: 7
+  ui-packaging:
+    name: Package UI ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Install pinned Rust toolchain for development checks
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Build native UI container and attestations
+        run: |
+          version=$(cargo xtask version)
+          commit=$(git rev-parse HEAD)
+          source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          docker buildx create --name ui-packaging --driver docker-container --use
+          build_args=(
+            --platform linux/${{ matrix.architecture }}
+            --progress plain
+            --build-arg "VCS_REF=$commit"
+            --build-arg "VERSION=$version"
+            --label "org.opencontainers.image.source=$source"
+          )
+          docker buildx build "${build_args[@]}" \
+            --sbom=true --provenance=mode=max \
+            --metadata-file /tmp/ui-package-metadata.json \
+            --output type=oci,dest=/tmp/logbrook-ui-${{ matrix.architecture }}.tar ui
+          docker buildx build "${build_args[@]}" --load -t logbrook-ui:ci ui
+
+          # Attested OCI exports contain an index rather than one image manifest.
+          archive=/tmp/logbrook-ui-${{ matrix.architecture }}.tar
+          index=$(jq -er '."containerimage.digest"' /tmp/ui-package-metadata.json)
+          manifest=$(tar -xOf "$archive" "blobs/sha256/${index#sha256:}" | jq -er \
+            --arg arch '${{ matrix.architecture }}' \
+            '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest')
+          expected=$(tar -xOf "$archive" "blobs/sha256/${manifest#sha256:}" | jq -er '.config.digest')
+          actual=$(docker image inspect logbrook-ui:ci --format '{{.Id}}')
+          test "$expected" = "$actual"
+
+          # The image carries the release metadata the publication relies on.
+          labels=$(docker image inspect logbrook-ui:ci --format '{{json .Config.Labels}}')
+          jq -e --arg commit "$commit" --arg version "$version" --arg source "$source" \
+            '.["org.opencontainers.image.revision"] == $commit
+             and .["org.opencontainers.image.version"] == $version
+             and .["org.opencontainers.image.source"] == $source' <<< "$labels"
+          test "$(docker image inspect logbrook-ui:ci --format '{{.Architecture}}')" = '${{ matrix.architecture }}'
+      - name: Smoke test the UI container
+        run: bash .github/scripts/ui-container-smoke.sh logbrook-ui:ci
+      - name: Upload UI OCI image with SBOM and provenance
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logbrook-ui-${{ matrix.architecture }}-oci
+          path: /tmp/logbrook-ui-${{ matrix.architecture }}.tar
+          retention-days: 7
   ui:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -188,55 +251,6 @@ jobs:
       - name: Build
         working-directory: ui
         run: pnpm build
-      - name: Build the UI container image
-        working-directory: ui
-        run: docker build --tag logbrook-ui:ci .
-      - name: The UI container refuses to start without a read token
-        run: |
-          if output=$(docker run --rm logbrook-ui:ci 2>&1); then
-            echo "$output"
-            echo "The container started without LOGBROOK_READ_TOKEN"
-            exit 1
-          fi
-          echo "$output"
-          echo "$output" | grep --fixed-strings 'LOGBROOK_READ_TOKEN is required'
-      - name: The UI container answers its health check
-        run: |
-          docker run --detach --name logbrook-ui-ci --publish 127.0.0.1:3000:3000 \
-            --env LOGBROOK_READ_TOKEN=ci-read-token-0123456789 logbrook-ui:ci
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3000/healthz; then
-              exit 0
-            fi
-            sleep 1
-          done
-          docker logs logbrook-ui-ci
-          exit 1
-      - name: The UI container warns about, and enforces, ALLOWED_HOSTS
-        run: |
-          docker rm --force logbrook-ui-ci
-          docker run --detach --name logbrook-ui-ci --publish 127.0.0.1:3000:3000 \
-            --env LOGBROOK_READ_TOKEN=ci-read-token-0123456789 logbrook-ui:ci
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3000/healthz; then break; fi
-            sleep 1
-          done
-          docker logs logbrook-ui-ci 2>&1 | grep --fixed-strings 'ALLOWED_HOSTS is not set'
-          docker rm --force logbrook-ui-ci
-          docker run --detach --name logbrook-ui-ci --publish 127.0.0.1:3000:3000 \
-            --env LOGBROOK_READ_TOKEN=ci-read-token-0123456789 \
-            --env ALLOWED_HOSTS=ui.example.test logbrook-ui:ci
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:3000/healthz; then break; fi
-            sleep 1
-          done
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --header 'Host: ui.example.test' http://127.0.0.1:3000/healthz)" = 200
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --header 'Host: evil.example' http://127.0.0.1:3000/healthz)" = 421
-      - name: Stop the UI container
-        if: always()
-        run: docker rm --force logbrook-ui-ci
       - name: Install Chromium for the browser tests
         working-directory: ui
         run: pnpm exec e2e-web install chromium --with-deps

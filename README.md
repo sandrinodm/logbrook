@@ -18,6 +18,7 @@ Logbrook is a single Rust executable that receives JSON logs over HTTP, stores r
 - **CLI** in the same executable for querying, counting, and managing indexes on a running server.
 - **Fluent Forward receiver**, off by default, for Docker's `fluentd` logging driver, Fluentd, and Fluent Bit.
 - **Offline import** of Pino JSON or NDJSON files.
+- **Web UI** as a separate image, `ghcr.io/sandrinodm/logbrook-ui`, released with the server under the same version. See the [UI guide](ui/README.md#deploy).
 - **Operations**: Prometheus metrics, health and readiness endpoints, and a Distroless container image with no shell that runs as UID 10001.
 
 ## How it works

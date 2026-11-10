@@ -159,13 +159,15 @@ jobs:
         run: |
           repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           image="ghcr.io/$repository:$VERSION"
+          ui_image="ghcr.io/$repository-ui:$VERSION"
           {
-            echo "Container image: \`$image\` (Linux amd64 and arm64)."
+            echo "Container images: \`$image\` and \`$ui_image\` (Linux amd64 and arm64)."
             echo
             echo "Source commit: \`$RELEASE_COMMIT\`. SBOM and provenance attestations are included."
             echo
             echo '```sh'
             echo "docker pull $image"
+            echo "docker pull $ui_image"
             echo '```'
           } > "$RUNNER_TEMP/release-notes.md"
 
@@ -184,7 +186,7 @@ jobs:
           {
             echo "GitHub release: $url"
             echo
-            echo "Container image: \`$image\`."
+            echo "Container images: \`$image\` and \`$ui_image\`."
             echo
-            echo 'For the first publication, make the GHCR package public to enable anonymous pulls.'
+            echo 'For the first publication, make the GHCR packages public to enable anonymous pulls.'
           } >> "$GITHUB_STEP_SUMMARY"

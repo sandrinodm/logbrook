@@ -47,6 +47,7 @@ jobs:
       commit: ${{ steps.release.outputs.commit }}
       version: ${{ steps.release.outputs.version }}
       image: ${{ steps.release.outputs.image }}
+      ui_image: ${{ steps.release.outputs.ui_image }}
     steps:
       - name: Validate release tag
         env:
@@ -85,6 +86,7 @@ jobs:
             echo "commit=$commit"
             echo "version=$version"
             echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "ui_image=ghcr.io/${GITHUB_REPOSITORY,,}-ui"
           } >> "$GITHUB_OUTPUT"
 
   verify:
@@ -94,14 +96,28 @@ jobs:
       ref: ${{ needs.prepare.outputs.commit }}
 
   publish:
+    name: Publish ${{ matrix.component }} image
     needs: [prepare, verify]
+    # The server and UI images are independent: one failing must not cancel the
+    # other mid-publication, and a re-run of failed jobs retries only the failed one.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: server
+            archive: logbrook
+            image: ${{ needs.prepare.outputs.image }}
+          - component: UI
+            archive: logbrook-ui
+            image: ${{ needs.prepare.outputs.ui_image }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     env:
-      IMAGE: ${{ needs.prepare.outputs.image }}
+      IMAGE: ${{ matrix.image }}
+      ARCHIVE: ${{ matrix.archive }}
       VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
     steps:
@@ -126,7 +142,7 @@ jobs:
       - name: Publish verified OCI artifacts by digest
         run: |
           for architecture in amd64 arm64; do
-            archive="$RUNNER_TEMP/oci/logbrook-$architecture.tar"
+            archive="$RUNNER_TEMP/oci/$ARCHIVE-$architecture.tar"
             manifest="$RUNNER_TEMP/$architecture-manifest.json"
             skopeo inspect --raw "oci-archive:$archive" > "$manifest"
             digest=$(skopeo manifest-digest "$manifest")

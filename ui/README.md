@@ -131,17 +131,22 @@ LOGBROOK_URL=http://127.0.0.1:3100 LOGBROOK_READ_TOKEN=<read token> LOGBROOK_ADM
 
 `pnpm start` runs `node .output/server/index.mjs`, which needs nothing else on disk. Leave `LOGBROOK_ADMIN_TOKEN` out for a read-only deployment. On `SIGTERM` or `SIGINT` the server stops accepting connections, ends the open live-tail streams (the browser reconnects with its last event ID) and exits as soon as the other requests finish, about a second after the signal; Nitro's 5 s grace period (`SERVER_SHUTDOWN_TIMEOUT`) is only the upper bound.
 
-As a container. The image builds on Node 26 and runs on distroless Node 26 (no shell or package manager) as the non-root user `65532`, with only the build output in it, owned by root. Base images are pinned by digest. `HOST=0.0.0.0` is set inside because loopback in a container is unreachable from the host, and the health check calls `/healthz`, which does not call Logbrook. The server writes nothing to disk, so `--read-only` works. The build context is an allowlist in `.dockerignore`, so a new build input must be added there.
+As a container. Each release publishes the UI as `ghcr.io/sandrinodm/logbrook-ui:<version>` for Linux amd64 and arm64, with the same version as the Logbrook server image it was released with, plus an SBOM and build provenance. The image builds on Node 26 and runs on distroless Node 26 (no shell or package manager) as the non-root user `65532`, with only the build output in it, owned by root. Base images are pinned by digest. `HOST=0.0.0.0` is set inside because loopback in a container is unreachable from the host, and the health check calls `/healthz`, which does not call Logbrook. The server writes nothing to disk, so `--read-only` works.
 
 ```sh
-cd ui
-docker build --tag logbrook-ui --build-arg VCS_REF="$(git rev-parse HEAD)" .
 docker run --read-only --cap-drop ALL --security-opt no-new-privileges \
   --publish 127.0.0.1:3000:3000 \
   --env LOGBROOK_URL=http://host.docker.internal:3100 \
   --env LOGBROOK_READ_TOKEN=<read token> \
   --env ALLOWED_HOSTS=localhost \
-  logbrook-ui
+  ghcr.io/sandrinodm/logbrook-ui:<version>
+```
+
+To build the image from source instead (for an unreleased commit), run `docker build` in this directory and use the local tag in the command above. The build context is an allowlist in `.dockerignore`, so a new build input must be added there.
+
+```sh
+cd ui
+docker build --tag logbrook-ui --build-arg VCS_REF="$(git rev-parse HEAD)" .
 ```
 
 Set `ALLOWED_HOSTS` to the name your browser uses (the public host name behind a proxy). Without it the container accepts any `Host` header and logs a warning at boot.
