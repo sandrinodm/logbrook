@@ -5,14 +5,15 @@ import spec from "@/api/openapi.json";
  * (`/indexes/{index}/logs`). The method chip beside it already shows the verb,
  * and the operation's summary is the page heading.
  *
- * Nimbus identifies an operation by a coordinate of the form
- * `get/indexes/index/logs`: the method, then the path without braces.
+ * Nimbus identifies an operation by its `operationId`, or without one by a
+ * coordinate of the form `get/indexes/index/logs`: the method, then the path
+ * without braces.
  */
 const paths = new Map<string, string>();
 
-for (const [path, item] of Object.entries(spec.paths as Record<string, object>)) {
-  for (const method of Object.keys(item)) {
-    paths.set(`${method}${path.replace(/[{}]/g, "")}`, path);
+for (const [path, item] of Object.entries(spec.paths as Record<string, Record<string, { operationId?: string }>>)) {
+  for (const [method, operation] of Object.entries(item)) {
+    paths.set(operation.operationId ?? `${method}${path.replace(/[{}]/g, "")}`, path);
   }
 }
 

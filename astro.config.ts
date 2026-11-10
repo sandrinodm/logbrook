@@ -38,11 +38,38 @@ const nimbusConfig = defineNimbusConfig({
   },
   // The API reference, served where its route file is (src/pages/api/ → /api).
   // See https://nimbus-docs.com/api-reference/
+  // `operations` sets each page URL by operationId. Without it, Nimbus derives
+  // the slug from the method (PUT becomes "update", so creating an index would
+  // be served at indexes/update). Add an entry when the spec gains an operation.
   api: [
     {
       collection: "api",
       spec: "./src/api/openapi.json",
-      routes: { convention: "resource-action-v2" },
+      routes: {
+        convention: "resource-action-v2",
+        operations: {
+          listIndexes: "indexes/list",
+          createIndex: "indexes/create",
+          getIndex: "indexes/get",
+          deleteIndex: "indexes/delete",
+          searchLogs: "logs/search",
+          countLogs: "logs/count",
+          getLogFacets: "logs/facets",
+          getLogHistogram: "logs/histogram",
+          ingestLogs: "logs/ingest",
+          tailLogs: "logs/tail",
+          searchDefaultLogs: "default-index/search",
+          countDefaultLogs: "default-index/count",
+          getDefaultLogFacets: "default-index/facets",
+          getDefaultLogHistogram: "default-index/histogram",
+          ingestDefaultLogs: "default-index/ingest",
+          tailDefaultLogs: "default-index/tail",
+          getHealth: "health",
+          getReadiness: "ready",
+          getMetrics: "metrics",
+          getOpenApiDocument: "openapi",
+        },
+      },
     },
   ],
 });
