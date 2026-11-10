@@ -7,6 +7,7 @@
   "paths": {
     "/logs": {
       "get": {
+        "operationId": "searchDefaultLogs",
         "summary": "Search the default index",
         "description": "Returns matching events, newest first by event time.",
         "security": [
@@ -215,6 +216,7 @@
     },
     "/logs/count": {
       "get": {
+        "operationId": "countDefaultLogs",
         "summary": "Count events in the default index",
         "description": "Returns the number of matching events.",
         "security": [
@@ -404,6 +406,7 @@
     },
     "/logs/facets": {
       "get": {
+        "operationId": "getDefaultLogFacets",
         "summary": "Facets for the default index",
         "description": "Returns value counts per field for the matching events.",
         "security": [
@@ -593,6 +596,7 @@
     },
     "/logs/histogram": {
       "get": {
+        "operationId": "getDefaultLogHistogram",
         "summary": "Histogram for the default index",
         "description": "Returns the number of matching events per time bucket.",
         "security": [
@@ -791,6 +795,7 @@
     },
     "/logs/ingest": {
       "post": {
+        "operationId": "ingestDefaultLogs",
         "summary": "Ingest into the default index",
         "description": "The batch is atomic: every event is stored or none is. Event times must fall between now minus the retention period and now plus the allowed future skew (five minutes by default). Producer fields that Logbrook doesn't map are kept in `attributes`.",
         "security": [
@@ -915,6 +920,7 @@
     },
     "/health": {
       "get": {
+        "operationId": "getHealth",
         "summary": "Liveness check",
         "security": [],
         "parameters": [],
@@ -1004,6 +1010,7 @@
     },
     "/ready": {
       "get": {
+        "operationId": "getReadiness",
         "summary": "Readiness check",
         "security": [],
         "parameters": [],
@@ -1093,6 +1100,7 @@
     },
     "/metrics": {
       "get": {
+        "operationId": "getMetrics",
         "summary": "Prometheus metrics",
         "description": "Requires a read token with no source or index restriction. Scoped tokens get `403`.",
         "security": [
@@ -1125,6 +1133,7 @@
     },
     "/logs/tail": {
       "get": {
+        "operationId": "tailDefaultLogs",
         "summary": "Tail the default index",
         "description": "Streams events as Server-Sent Events, in ingestion order. Without `Last-Event-ID` the stream starts after the newest committed event; with it, retained events after that ID are replayed first.\n\n`log` frames carry one event. A `cursor` frame means the stream has caught up. `gap` and `error` frames end the stream; after a `gap`, search the retained history before you reconnect.\n\nFrame IDs are opaque resume tokens bound to the route and filters. They aren't interchangeable with `next_cursor` values or event `id`s.",
         "security": [
@@ -1253,6 +1262,7 @@
     },
     "/openapi.json": {
       "get": {
+        "operationId": "getOpenApiDocument",
         "summary": "OpenAPI document",
         "responses": {
           "200": {
@@ -1270,6 +1280,7 @@
     },
     "/indexes/{index}/logs": {
       "get": {
+        "operationId": "searchLogs",
         "summary": "Search an index",
         "description": "Returns matching events, newest first by event time. `next_cursor` is bound to this index and query.",
         "security": [
@@ -1500,6 +1511,7 @@
     },
     "/indexes/{index}/logs/count": {
       "get": {
+        "operationId": "countLogs",
         "summary": "Count events",
         "description": "Returns the number of matching events.",
         "security": [
@@ -1711,6 +1723,7 @@
     },
     "/indexes/{index}/logs/facets": {
       "get": {
+        "operationId": "getLogFacets",
         "summary": "Facets",
         "description": "Returns value counts per field for the matching events.",
         "security": [
@@ -1922,6 +1935,7 @@
     },
     "/indexes/{index}/logs/histogram": {
       "get": {
+        "operationId": "getLogHistogram",
         "summary": "Histogram",
         "description": "Returns the number of matching events per time bucket.",
         "security": [
@@ -2142,6 +2156,7 @@
     },
     "/indexes/{index}/logs/ingest": {
       "post": {
+        "operationId": "ingestLogs",
         "summary": "Ingest events",
         "description": "The batch is atomic: every event is stored or none is. Event times must fall between now minus the retention period and now plus the allowed future skew (five minutes by default). Producer fields that Logbrook doesn't map are kept in `attributes`. The first authorized write to a missing index creates it, up to `max_indexes`.",
         "security": [
@@ -2289,6 +2304,7 @@
     },
     "/indexes/{index}/logs/tail": {
       "get": {
+        "operationId": "tailLogs",
         "summary": "Tail an index",
         "description": "Streams events as Server-Sent Events, in ingestion order. Without `Last-Event-ID` the stream starts after the newest committed event; with it, retained events after that ID are replayed first.\n\n`log` frames carry one event. A `cursor` frame means the stream has caught up. `gap` and `error` frames end the stream; after a `gap`, search the retained history before you reconnect.\n\nFrame IDs are opaque resume tokens bound to the route and filters. They aren't interchangeable with `next_cursor` values or event `id`s.",
         "security": [
@@ -2439,6 +2455,7 @@
     },
     "/indexes": {
       "get": {
+        "operationId": "listIndexes",
         "summary": "List indexes",
         "description": "Lists the indexes the token can read. An admin token sees every index. Source-scoped read tokens get names only; other callers also get file sizes and retention policy.",
         "security": [
@@ -2482,6 +2499,7 @@
     },
     "/indexes/{index}": {
       "put": {
+        "operationId": "createIndex",
         "summary": "Create an index",
         "description": "Creates the index with the configured policy, or returns it if it already exists. Requires an admin token, or an ingestion token scoped to the index. `max_indexes` caps how many can exist.",
         "security": [
@@ -2534,6 +2552,7 @@
         }
       },
       "get": {
+        "operationId": "getIndex",
         "summary": "Get an index",
         "description": "Source-scoped read tokens get the name only; other callers also get file sizes and retention policy.",
         "security": [
@@ -2584,6 +2603,7 @@
         }
       },
       "delete": {
+        "operationId": "deleteIndex",
         "summary": "Delete an index",
         "description": "Permanently deletes a dynamically created index and its events. Requires the admin token. The `default` index and indexes declared in the server configuration can't be deleted. Once accepted, the deletion finishes even if the client disconnects. A later ingest to the same name recreates the index, so stop producers first.",
         "security": [
