@@ -63,11 +63,16 @@ const open = !deferred || onActiveTrail;
   ) : (
     <SidebarLink
       label={pathLabel(item.coordinate, item.label)}
+      title={pathLabel(item.coordinate, item.label)}
       href={item.href ?? "#"}
       isCurrent={item.active}
       class={item.deprecated ? "line-through" : undefined}
     >
       <ApiMethodChip slot="leading" method={item.method} display="label" />
+      {/* A path has no spaces to wrap at, so a long one would run past the
+          rail. Keep it on one line and cut it with an ellipsis; the link's
+          title shows the full path on hover. */}
+      <span slot="label" class="min-w-0 truncate">{pathLabel(item.coordinate, item.label)}</span>
     </SidebarLink>
   )
 }

@@ -34,7 +34,7 @@ const plain = !hasLeading && !badge;
   ) : (
     <Fragment>
       <slot name="leading" />
-      {badge ? <span>{label}</span> : label}
+      {badge ? <span>{label}</span> : Astro.slots.has("label") ? <slot name="label" /> : label}
       {badge &&
         (typeof badge === "string" ? (
           <Badge text={badge} />
