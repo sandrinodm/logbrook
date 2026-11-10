@@ -23,12 +23,12 @@ This Compose deployment keeps its data in a named volume, reads its credentials 
     ```
   </Step>
   <Step title="Write compose.yaml">
-    It runs the published `ghcr.io/sandrinodm/logbrook:0.2.0` image and takes the credentials from `.env`. To run another release, a digest or your own build, set `LOGBROOK_IMAGE` in `.env`.
+    It runs the published `ghcr.io/sandrinodm/logbrook:0.3.0` image and takes the credentials from `.env`. To run another release, a digest or your own build, set `LOGBROOK_IMAGE` in `.env`.
 
     ```yaml title="compose.yaml"
     services:
       logbrook:
-        image: ${LOGBROOK_IMAGE:-ghcr.io/sandrinodm/logbrook:0.2.0}
+        image: ${LOGBROOK_IMAGE:-ghcr.io/sandrinodm/logbrook:0.3.0}
         ports:
           - "127.0.0.1:3100:3100"
         environment:

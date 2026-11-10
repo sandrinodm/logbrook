@@ -7,18 +7,18 @@ sidebar:
 
 ## Pick an image
 
-Images are published to GitHub Container Registry as `ghcr.io/sandrinodm/logbrook`. Each release is one multi-platform image for `linux/amd64` and `linux/arm64`, with dependency notices, an SBOM and build provenance. Docker picks the right platform for your host.
+Images are published to GitHub Container Registry as `ghcr.io/sandrinodm/logbrook`, and since 0.3.0 the [web UI](/web-ui/) as `ghcr.io/sandrinodm/logbrook-ui` with the same tags. Each release is one multi-platform image per component for `linux/amd64` and `linux/arm64`, with dependency notices, an SBOM and build provenance. Docker picks the right platform for your host.
 
 | Tag | Meaning |
 | --- | --- |
-| `0.2.0` | The release version, without the Git tag's `v` prefix |
+| `0.3.0` | The release version, without the Git tag's `v` prefix |
 | `sha-<full-commit>` | The source commit of that release |
 | `latest` | Updated only when the maintainer selects it, and only for a stable version |
 
 Pull a version:
 
 ```sh
-docker pull ghcr.io/sandrinodm/logbrook:0.2.0
+docker pull ghcr.io/sandrinodm/logbrook:0.3.0
 ```
 
 To get the same image every time, pull by digest. `docker pull` prints the digest, and the GitHub release notes include a `docker pull` command:
