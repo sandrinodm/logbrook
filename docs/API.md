@@ -163,7 +163,7 @@ A paginated search only returns events that were ingested before its first page,
 Pass one URL-encoded JSON object in `filter`:
 
 ```json
-{"attributes":[{"key":"runId","op":"eq","value":"run-123"},{"key":"actorJobId","op":"eq","value":"actor-job-456"}]}
+{"attributes":[{"key":"runId","op":"eq","value":"run-123"},{"key":"userId","op":"eq","value":"user-456"}]}
 ```
 
 All conditions must match, and they apply before pagination and aggregation, so counts, facets and histograms cover only matching events. The same `filter` works on search, count, facets, histogram and tail, and combines with the other filters such as `min_level=50`.

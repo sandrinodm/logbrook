@@ -131,7 +131,7 @@ tail_poll_ms = 1000
 # for a new index. Activation records an immutable key set and upgrades that
 # index to schema 4; later omission/[] retains its durable layout. Changing the
 # set requires a new index and reimport. Take an offline backup before activation.
-# promoted_string_keys = ["runId", "actorJobId", "videoId"]
+# promoted_string_keys = ["tenantId", "userId", "requestId"]
 
 # Root storage directory; index data lives under <data_dir>/indexes/<name>.
 # Relative paths resolve from the server's working directory. Paths must be UTF-8
@@ -230,7 +230,7 @@ maintenance_timeout_ms = 30000
 [indexes.payments]
 # Optional override of storage.promoted_string_keys. [] prevents activation on
 # an unactivated index; it does not disable a previously activated layout.
-# promoted_string_keys = ["runId", "actorJobId"]
+# promoted_string_keys = ["tenantId", "userId"]
 # Payments retention in days; overrides global retention, including env settings.
 # TOML only; no env override. Use this or retention_ms, never both in one index.
 retention_days = 30

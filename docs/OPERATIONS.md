@@ -128,7 +128,7 @@ For top-level string attributes you filter on often, configure a small set of ph
 
 ```toml
 [storage]
-promoted_string_keys = ["runId", "actorJobId", "videoId"]
+promoted_string_keys = ["tenantId", "userId", "requestId"]
 ```
 
 `indexes.<name>.promoted_string_keys` overrides the global list for one index. You can promote up to eight distinct keys, each 1–256 UTF-8 bytes. Only string equality filters on those keys get faster; numeric and boolean filters and other keys use the JSON path as before. Query results, live tail, authorization and cursors behave the same.
